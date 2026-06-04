@@ -1,0 +1,6 @@
+.DS_Store
+nestor
+*.exe
+*.test
+vendor/
+dist/
