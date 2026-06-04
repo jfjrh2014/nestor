@@ -35,6 +35,10 @@ func configPath() string {
 	if cfgFile != "" {
 		return cfgFile
 	}
+	// prefer local nestor.yml if present
+	if _, err := os.Stat("nestor.yml"); err == nil {
+		return "nestor.yml"
+	}
 	home, _ := os.UserHomeDir()
 	return fmt.Sprintf("%s/.config/nestor/nestor.yml", home)
 }

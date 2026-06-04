@@ -3,8 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/platform"
+	"github.com/jfjrh2014/nestor/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -23,24 +26,38 @@ func init() {
 }
 
 func runUp(ctx context.Context) error {
-	path := configPath()
+	p := ui.New(os.Stdout)
 
-	fmt.Printf("nestor: loading config from %s\n", path)
+	path := configPath()
+	p.Info(fmt.Sprintf("loading config from %s", path))
 
 	cfg, err := config.Load(path)
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
 	}
 
-	fmt.Printf("nestor: config v%d loaded (dotfiles strategy: %s)\n", cfg.Version, cfg.Dotfiles.Strategy)
+	p.OK(fmt.Sprintf("config v%d loaded", cfg.Version))
+	p.Detail("dotfiles strategy", cfg.Dotfiles.Strategy)
 
-	// TODO: Phase 1 — implement each step
-	fmt.Println("nestor: detecting OS...")
-	fmt.Println("nestor: installing packages...")
-	fmt.Println("nestor: deploying dotfiles...")
-	fmt.Println("nestor: injecting secrets...")
-	fmt.Println("nestor: configuring shell...")
-	fmt.Println("nestor: ✓ environment is up")
+	// Step 1: detect platform
+	p.Header("platform")
+	plat, err := platform.Detect()
+	if err != nil {
+		p.Warn(err.Error())
+	} else {
+		p.OK("platform detected")
+	}
+	p.Detail("os", plat.OS)
+	p.Detail("arch", plat.Arch)
+	p.Detail("package manager", plat.PackageManager)
+
+	// TODO: install packages based on platform.PackageManager
+	// TODO: deploy dotfiles from cfg.Dotfiles
+	// TODO: inject secrets from cfg.Secrets
+	// TODO: configure shell from cfg.Shells
+
+	p.Header("result")
+	p.OK("environment is up")
 
 	return nil
 }
