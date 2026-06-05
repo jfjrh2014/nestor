@@ -226,3 +226,15 @@ profiles:
 - Added tests for platform + config packages
 - Build clean (CGO_ENABLED=0), all tests pass, vet pass
 - Next: package installation step in `up`
+
+### 2026-06-05 — Daily dev session #3
+
+- Built `internal/packages`: Spec parser, Resolver, InstallAll
+- Parsed specs: plain name, `manager: name`, `manager/sub: name`
+- Resolver merges common + platform lists, dedup'd
+- Backends: brew (formula + cask), apt, dnf, pacman, snap
+- IsInstalled skips already-present packages
+- Wired into `cmd/up` with summary line
+- Smoke-tested: installed `sl` and `cowsay` on linux, then cleaned up
+- Tests cover parse, resolve, manager factory
+- Next: dotfile deployment (copy + symlink strategies)
