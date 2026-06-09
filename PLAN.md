@@ -238,3 +238,16 @@ profiles:
 - Smoke-tested: installed `sl` and `cowsay` on linux, then cleaned up
 - Tests cover parse, resolve, manager factory
 - Next: dotfile deployment (copy + symlink strategies)
+
+### 2026-06-09 — Daily dev session #4
+
+- Built `cmd/list`: shows all managed packages, dotfiles, secrets with live status
+- Built `cmd/add`: interactively adds packages, dotfiles, or secrets to config
+- Built `cmd/diff`: drift detection for packages (missing) and dotfiles (drifted/absent)
+- `internal/dotfiles`: full deploy (copy + symlink), Go template rendering, drift check
+- `internal/secrets`: env/1password/bitwarden/vault providers, injection into files
+- `cmd/up`: fully wired — packages → dotfiles → secrets in sequence
+- `internal/config`: added Marshal() for round-trip editing (load → modify → save)
+- Added .gitignore for test artifacts
+- 29 new tests across all packages, all passing. Build clean. Vet clean.
+- Next: `nestor doctor` (health check) or `nestor sync` (capture live state)
