@@ -76,6 +76,56 @@ func TestLoadBadStrategy(t *testing.T) {
 	}
 }
 
+func TestMarshalRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nestor.yml")
+	original := `version: 1
+packages:
+  common:
+    - git
+    - ripgrep
+dotfiles:
+  source: /tmp/dots
+  strategy: copy
+secrets:
+  provider: env
+shells:
+  default: zsh
+profiles: {}
+`
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	data, err := Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Write back and reload
+	outPath := filepath.Join(dir, "out.yml")
+	if err := os.WriteFile(outPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg2, err := Load(outPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	if len(cfg2.Packages.Common) != 2 {
+		t.Errorf("round-trip lost packages: got %v", cfg2.Packages.Common)
+	}
+	if cfg2.Secrets.Provider != "env" {
+		t.Errorf("round-trip lost provider: got %q", cfg2.Secrets.Provider)
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	got := expandHome("~/foo/bar", "/home/marcus")
 	want := "/home/marcus/foo/bar"

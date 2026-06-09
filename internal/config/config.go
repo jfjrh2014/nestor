@@ -101,6 +101,15 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// Marshal serializes the config back to YAML bytes.
+func Marshal(cfg *Config) ([]byte, error) {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling config: %w", err)
+	}
+	return data, nil
+}
+
 func expandHome(path, home string) string {
 	if path == "" {
 		return path

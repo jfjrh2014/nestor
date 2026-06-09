@@ -4,3 +4,8 @@ nestor
 *.test
 vendor/
 dist/
+
+# test artifacts
+test-deployed/
+test-dotfiles/
+test-nestor.yml
