@@ -250,4 +250,16 @@ profiles:
 - `internal/config`: added Marshal() for round-trip editing (load → modify → save)
 - Added .gitignore for test artifacts
 - 29 new tests across all packages, all passing. Build clean. Vet clean.
-- Next: `nestor doctor` (health check) or `nestor sync` (capture live state)
+- Next: `nestor rollback` or `nestor edit`
+
+### 2026-06-10 — Daily dev session #5
+
+- Built `cmd/doctor`: full health check — config, platform+pkgmgr, packages, dotfiles, secrets provider
+- Built `cmd/sync`: scans installed packages + common dotfiles, generates or merges nestor.yml
+- Doctor output: color-coded ✓/!/✗ per category, issue count, fix suggestion
+- Sync: detects 5 packages (git, curl, wget, vim, jq) + 2 dotfiles (.bashrc, .gitconfig) on this machine
+- Both merge-aware: doctor on existing config, sync merges detected packages into existing config
+- `secretCLI()` helper maps provider names to required binary names
+- 5 new tests (scanDotfiles, scanPackages, checkPkgInstalled, secretCLI, valid config)
+- Build clean. Vet clean. All tests pass. Pushed.
+- Next: `nestor rollback` or `nestor edit`
