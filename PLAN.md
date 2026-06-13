@@ -263,3 +263,23 @@ profiles:
 - 5 new tests (scanDotfiles, scanPackages, checkPkgInstalled, secretCLI, valid config)
 - Build clean. Vet clean. All tests pass. Pushed.
 - Next: `nestor rollback` or `nestor edit`
+
+### 2026-06-13 — Daily dev session #6
+
+- Shipped rollback feature (was staged but blocked on commit permission previously)
+- `internal/snapshot`: Create, List, Restore, Delete — backs up dotfile destinations before overwriting
+- `cmd/rollback`: restores from latest or specific snapshot ID
+- `cmd/snapshots`: lists available snapshots
+- `cmd/up` auto-snapshots before dotfile deploy (non-fatal on failure)
+- Next: profiles feature
+
+### 2026-06-13 — Daily dev session #7
+
+- Built profiles feature: `nestor up --profile personal` layers extra packages
+- `cmd/profiles`: lists all defined profiles with package counts (sorted, deterministic)
+- Config gains `ValidProfile` and `ProfilePackages` helpers
+- Profile packages merge into resolver after platform packages (dedup handled by IsInstalled check)
+- Renamed local `failed` vars to `failedCount` in up.go to avoid shadow lint issues
+- 2 new tests (TestValidProfile, TestProfilePackages) — all 9 config tests pass
+- Build clean. Vet clean. All tests pass. Pushed.
+- Next: `nestor edit` (interactive template editing)
