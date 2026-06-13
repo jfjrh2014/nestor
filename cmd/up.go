@@ -16,19 +16,34 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var upProfileFlag string
+
 var upCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Bootstrap your dev environment from nestor.yml",
 	Long: `Detects your OS, installs packages, deploys dotfiles,
-injects secrets, and configures your shell. One command, full setup.`,
+injects secrets, and configures your shell. One command, full setup.
+
+Use --profile to layer a named profile's packages on top of the base config.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runUp(cmd.Context())
+		return runUp(ctxWithProfile(cmd))
 	},
 }
 
 func init() {
+	upCmd.Flags().StringVarP(&upProfileFlag, "profile", "p", "", "apply a named profile (extra packages)")
 	rootCmd.AddCommand(upCmd)
 }
+
+func ctxWithProfile(cmd *cobra.Command) context.Context {
+	ctx := cmd.Context()
+	if upProfileFlag != "" {
+		ctx = context.WithValue(ctx, profileKey{}, upProfileFlag)
+	}
+	return ctx
+}
+
+type profileKey struct{}
 
 func runUp(ctx context.Context) error {
 	p := ui.New(os.Stdout)
@@ -44,6 +59,16 @@ func runUp(ctx context.Context) error {
 	p.OK(fmt.Sprintf("config v%d loaded", cfg.Version))
 	p.Detail("dotfiles strategy", cfg.Dotfiles.Strategy)
 
+	// resolve profile
+	profileName, _ := ctx.Value(profileKey{}).(string)
+	if profileName != "" {
+		if !cfg.ValidProfile(profileName) {
+			return fmt.Errorf("unknown profile: %s", profileName)
+		}
+		p.OK(fmt.Sprintf("profile: %s", profileName))
+		p.Detail("profile packages", fmt.Sprintf("%d", len(cfg.ProfilePackages(profileName))))
+	}
+
 	// Step 1: detect platform
 	p.Header("platform")
 	plat, err := platform.Detect()
@@ -56,7 +81,7 @@ func runUp(ctx context.Context) error {
 	p.Detail("arch", plat.Arch)
 	p.Detail("package manager", plat.PackageManager)
 
-	// Step 2: install packages
+	// Step 2: install packages (base + profile extras)
 	p.Header("packages")
 	resolver := packages.Resolver{
 		Common: cfg.Packages.Common,
@@ -66,8 +91,11 @@ func runUp(ctx context.Context) error {
 			"wsl":   cfg.Packages.WSL,
 		},
 	}
-	specs := make([]packages.Spec, 0, len(resolver.Resolve(plat.OS)))
-	for _, raw := range resolver.Resolve(plat.OS) {
+	resolved := resolver.Resolve(plat.OS)
+	resolved = append(resolved, cfg.ProfilePackages(profileName)...)
+
+	specs := make([]packages.Spec, 0, len(resolved))
+	for _, raw := range resolved {
 		specs = append(specs, packages.ParseSpec(raw, plat.PackageManager))
 	}
 
@@ -76,7 +104,7 @@ func runUp(ctx context.Context) error {
 	} else {
 		p.Info(fmt.Sprintf("installing %d packages", len(specs)))
 		results := packages.InstallAll(specs, plat.PackageManager)
-		installed, skipped, failed := 0, 0, 0
+		installed, skipped, failedCount := 0, 0, 0
 		for _, r := range results {
 			switch r.Status {
 			case packages.StatusInstalled:
@@ -85,11 +113,11 @@ func runUp(ctx context.Context) error {
 			case packages.StatusAlreadyInstalled:
 				skipped++
 			case packages.StatusError:
-				failed++
+				failedCount++
 				p.Error(fmt.Sprintf("%s: %v", r.Spec.Name, r.Err))
 			}
 		}
-		p.Info(fmt.Sprintf("%d installed, %d already present, %d failed", installed, skipped, failed))
+		p.Info(fmt.Sprintf("%d installed, %d already present, %d failed", installed, skipped, failedCount))
 	}
 
 	// Step 3: snapshot existing dotfiles before overwriting
@@ -131,18 +159,18 @@ func runUp(ctx context.Context) error {
 		deployer := dotfiles.Deployer{Strategy: strategy, Source: source}
 		results := deployer.DeployAll(temps)
 
-		deployed, failed := 0, 0
+		deployed, failedCount := 0, 0
 		for _, r := range results {
 			switch r.Status {
 			case dotfiles.StatusDeployed:
 				deployed++
 				p.OK(r.Template.Dest)
 			case dotfiles.StatusError:
-				failed++
+				failedCount++
 				p.Error(fmt.Sprintf("%s: %v", r.Template.Dest, r.Err))
 			}
 		}
-		p.Info(fmt.Sprintf("%d deployed, %d failed", deployed, failed))
+		p.Info(fmt.Sprintf("%d deployed, %d failed", deployed, failedCount))
 	}
 
 	// Step 5: inject secrets
@@ -164,18 +192,18 @@ func runUp(ctx context.Context) error {
 				p.Error(fmt.Sprintf("resolve: %v", err))
 			} else {
 				results := secrets.InjectAll(vals, sMappings)
-				injected, failed := 0, 0
+				injected, failedCount := 0, 0
 				for _, r := range results {
 					switch r.Status {
 					case secrets.StatusInjected:
 						injected++
 						p.OK(r.Dest)
 					case secrets.StatusError:
-						failed++
+						failedCount++
 						p.Error(fmt.Sprintf("%s: %v", r.Dest, r.Err))
 					}
 				}
-				p.Info(fmt.Sprintf("%d injected, %d failed", injected, failed))
+				p.Info(fmt.Sprintf("%d injected, %d failed", injected, failedCount))
 			}
 		}
 	}

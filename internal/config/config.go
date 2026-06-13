@@ -57,9 +57,29 @@ type Shells struct {
 	Plugins []string `yaml:"plugins"`
 }
 
-// Profile defines a named set of extra packages
+// Profile defines a named set of extra packages, dotfile variants, and secrets
+// that layer on top of the base config when activated.
 type Profile struct {
 	Packages []string `yaml:"packages"`
+}
+
+// ValidProfile returns true if a profile with the given name is defined.
+func (c *Config) ValidProfile(name string) bool {
+	_, ok := c.Profiles[name]
+	return ok
+}
+
+// ProfilePackages returns the extra packages for a profile, or empty slice if
+// the profile doesn't exist.
+func (c *Config) ProfilePackages(name string) []string {
+	if name == "" {
+		return nil
+	}
+	p, ok := c.Profiles[name]
+	if !ok {
+		return nil
+	}
+	return p.Packages
 }
 
 // Load reads and parses a nestor.yml file

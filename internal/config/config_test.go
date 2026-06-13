@@ -141,3 +141,48 @@ func TestExpandHome(t *testing.T) {
 		t.Error("absolute path should not be expanded")
 	}
 }
+
+func TestValidProfile(t *testing.T) {
+	cfg := &Config{
+		Profiles: map[string]Profile{
+			"personal": {Packages: []string{"discord"}},
+			"work":     {Packages: []string{"slack"}},
+		},
+	}
+
+	if !cfg.ValidProfile("personal") {
+		t.Error("expected 'personal' to be valid")
+	}
+	if !cfg.ValidProfile("work") {
+		t.Error("expected 'work' to be valid")
+	}
+	if cfg.ValidProfile("ghost") {
+		t.Error("expected 'ghost' to be invalid")
+	}
+}
+
+func TestProfilePackages(t *testing.T) {
+	cfg := &Config{
+		Profiles: map[string]Profile{
+			"personal": {Packages: []string{"discord", "spotify"}},
+			"work":     {Packages: []string{"slack"}},
+		},
+	}
+
+	got := cfg.ProfilePackages("personal")
+	if len(got) != 2 {
+		t.Fatalf("personal packages = %d, want 2", len(got))
+	}
+	if got[0] != "discord" || got[1] != "spotify" {
+		t.Errorf("personal packages = %v, want [discord spotify]", got)
+	}
+
+	// empty name returns nil
+	if cfg.ProfilePackages("") != nil {
+		t.Error("empty profile name should return nil")
+	}
+	// nonexistent returns nil
+	if cfg.ProfilePackages("ghost") != nil {
+		t.Error("nonexistent profile should return nil")
+	}
+}
