@@ -11,6 +11,7 @@ import (
 	"github.com/jfjrh2014/nestor/internal/packages"
 	"github.com/jfjrh2014/nestor/internal/platform"
 	"github.com/jfjrh2014/nestor/internal/secrets"
+	"github.com/jfjrh2014/nestor/internal/snapshot"
 	"github.com/jfjrh2014/nestor/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -91,7 +92,21 @@ func runUp(ctx context.Context) error {
 		p.Info(fmt.Sprintf("%d installed, %d already present, %d failed", installed, skipped, failed))
 	}
 
-	// Step 3: deploy dotfiles
+	// Step 3: snapshot existing dotfiles before overwriting
+	if len(cfg.Dotfiles.Templates) > 0 {
+		destPaths := make([]string, 0, len(cfg.Dotfiles.Templates))
+		for _, t := range cfg.Dotfiles.Templates {
+			destPaths = append(destPaths, t.Dest)
+		}
+		snap, err := snapshot.Create(destPaths)
+		if err != nil {
+			p.Warn(fmt.Sprintf("snapshot failed (non-fatal): %v", err))
+		} else if len(snap.Files) > 0 {
+			p.OK(fmt.Sprintf("snapshot created (%d files backed up)", len(snap.Files)))
+		}
+	}
+
+	// Step 4: deploy dotfiles
 	p.Header("dotfiles")
 	if len(cfg.Dotfiles.Templates) == 0 {
 		p.Info("no templates declared")
@@ -130,7 +145,7 @@ func runUp(ctx context.Context) error {
 		p.Info(fmt.Sprintf("%d deployed, %d failed", deployed, failed))
 	}
 
-	// Step 4: inject secrets
+	// Step 5: inject secrets
 	p.Header("secrets")
 	if len(cfg.Secrets.Mappings) == 0 || cfg.Secrets.Provider == "" {
 		p.Info("no secrets declared")
