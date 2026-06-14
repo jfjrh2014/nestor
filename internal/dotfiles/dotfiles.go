@@ -157,6 +157,12 @@ func renderTemplate(path string) ([]byte, error) {
 	return []byte(buf.String()), nil
 }
 
+// Render is the exported version of renderTemplate, used by 'nestor edit'
+// to preview resolved template output without deploying.
+func Render(path string) ([]byte, error) {
+	return renderTemplate(path)
+}
+
 func fallbackCopy(src, dest string) error {
 	in, err := os.Open(src)
 	if err != nil {
