@@ -283,3 +283,12 @@ profiles:
 - 2 new tests (TestValidProfile, TestProfilePackages) — all 9 config tests pass
 - Build clean. Vet clean. All tests pass. Pushed.
 - Next: `nestor edit` (interactive template editing)
+
+### 2026-06-14 — Daily dev session #8
+
+- Built `cmd/edit`: open template in $EDITOR, create new if absent, preview rendered output for .tmpl files
+- Exposed `dotfiles.Render` (exported wrapper around renderTemplate) so edit can preview without deploying
+- `openEditor` respects $EDITOR, $VISUAL, falls back to vi
+- 3 new tests (create+preview, missing config error, non-template skips preview) — all pass
+- Build clean. Vet clean. All 38 tests pass. Pushed.
+- Next: Phase 2 item #6 — `nestor secrets` (inject + check subcommands)
