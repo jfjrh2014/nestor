@@ -292,3 +292,14 @@ profiles:
 - 3 new tests (create+preview, missing config error, non-template skips preview) — all pass
 - Build clean. Vet clean. All 38 tests pass. Pushed.
 - Next: Phase 2 item #6 — `nestor secrets` (inject + check subcommands)
+
+### 2026-06-15 — Daily dev session #9
+
+- Built `cmd/secrets`: `nestor secrets inject` and `nestor secrets check` subcommands
+- `inject`: resolves all configured secrets via the provider, writes them into target dotfiles
+- `check`: dry run — verifies provider CLI is in PATH, every key resolves, lists inject targets
+- Reuses existing `internal/secrets` provider infrastructure (env, 1password, bitwarden, vault)
+- 4 new tests (no-secrets, env-provider reachable, missing-key detection, inject-creates-file)
+- Fixed Go 1.19 compat in tests (`t.Context()` not available, used `context.Background()`)
+- Build clean. Vet clean. All 42 tests pass. Pushed.
+- Next: Phase 3 TUI dashboard (#12) or Phase 4 import (#14)
