@@ -86,6 +86,7 @@ profiles:
 | `nestor sync` | Capture current machine into config |
 | `nestor list` | Show all managed items and status |
 | `nestor doctor` | Health check everything |
+| `nestor import [chezmoi\|yadm\|brewfile]` | Import from an existing dotfile manager |
 
 ## Design Principles
 

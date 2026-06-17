@@ -303,3 +303,15 @@ profiles:
 - Fixed Go 1.19 compat in tests (`t.Context()` not available, used `context.Background()`)
 - Build clean. Vet clean. All 42 tests pass. Pushed.
 - Next: Phase 3 TUI dashboard (#12) or Phase 4 import (#14)
+
+### 2026-06-17 — Daily dev session #10
+
+- Built `nestor import` — Phase 4 item #14: import packages and dotfiles from existing tools
+- Three importers: **chezmoi** (source dir walk, decodes dot_/private_/executable_ prefixes), **yadm** (`yadm list -a`), **brewfile** (parses brew/cask/tap entries)
+- Auto-detection: `nestor import` with no source checks chezmoi, then yadm, then Brewfile
+- `--dry-run` flag previews what would import without writing
+- `MergeResult` deduplicates against existing config (packages by string match, dotfiles by dest path)
+- Chezmoi path decoder handles compound attribute prefixes (private_executable_dot_foo -> .foo)
+- 9 new tests across all three importers + dedup logic
+- All 67 tests pass. Build clean. Vet clean.
+- Next: Phase 3 TUI dashboard (#12) or Phase 4 item #15 (`nestor ci`)
