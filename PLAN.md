@@ -315,3 +315,14 @@ profiles:
 - 9 new tests across all three importers + dedup logic
 - All 67 tests pass. Build clean. Vet clean.
 - Next: Phase 3 TUI dashboard (#12) or Phase 4 item #15 (`nestor ci`)
+
+### 2026-06-18 — Daily dev session #11
+
+- Built `nestor dashboard` — Phase 3 item #12: interactive bubbletea TUI
+- 4 tabs: Overview (health summary), Packages (installed/missing status), Dotfiles (present/drifted/missing), Secrets (configured keys)
+- Async status loading: tea.Cmd polls platform.Detect() + packages.Manager.IsInstalled at launch, TUI renders immediately
+- Navigation: j/k or arrows, tab/shift+tab cycles panels, 1-4 jumps directly, q/esc quits
+- Added charmbracelet/bubbletea + lipgloss dependencies
+- 3 new tests (dashSecretsProvider, dashProfiles, dashExpandTilde) — all 70 pass
+- Build clean. Vet clean. Pushed.
+- Next: Phase 4 item #15 (`nestor ci`) or Phase 4 item #13 (`nestor restore`)
