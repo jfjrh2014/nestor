@@ -326,3 +326,15 @@ profiles:
 - 3 new tests (dashSecretsProvider, dashProfiles, dashExpandTilde) — all 70 pass
 - Build clean. Vet clean. Pushed.
 - Next: Phase 4 item #15 (`nestor ci`) or Phase 4 item #13 (`nestor restore`)
+
+### 2026-06-19 — Daily dev session #12
+
+- Built `nestor ci` — Phase 4 item #15: CI-safe config validation
+- `internal/ci`: static validator (no installs, no writes, no network)
+  - Checks: version, strategy, package manager prefixes, template dedup + source existence, secret provider + key completeness, profiles
+  - Findings classification: errors (fatal) vs warnings
+- `cmd/ci`: runs validation, exits non-zero on errors (CI-friendly)
+  - `--quiet` flag silences output on success (reduce CI log noise)
+- 12 new tests (version, strategy, dup dest, empty fields, source exists, unknown mgr, no provider, invalid provider, valid provider, empty key, profiles, report counts)
+- All 80 tests pass. Build clean. Vet clean. Pushed.
+- Next: Phase 4 item #13 (`nestor restore --from <url>`) — last remaining planned feature
