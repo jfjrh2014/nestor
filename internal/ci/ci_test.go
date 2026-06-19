@@ -1,0 +1,284 @@
+package ci
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/jfjrh2014/nestor/internal/config"
+)
+
+func TestValidateConfigVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version int
+		wantErr bool
+	}{
+		{"v1 ok", 1, false},
+		{"zero fails", 0, true},
+		{"v2 fails", 2, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Version: tt.version, Dotfiles: config.Dotfiles{Strategy: "copy"}}
+			r := Validate(cfg, "")
+			if tt.wantErr && r.ErrorCount() == 0 {
+				t.Errorf("expected error for version %d, got none", tt.version)
+			}
+			if !tt.wantErr && r.ErrorCount() > 0 {
+				t.Errorf("expected no errors for version %d, got %d", tt.version, r.ErrorCount())
+			}
+		})
+	}
+}
+
+func TestValidateDotfilesStrategy(t *testing.T) {
+	tests := []struct {
+		strategy string
+		wantErr  bool
+	}{
+		{"copy", false},
+		{"symlink", false},
+		{"", false}, // defaults to copy
+		{"weird", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.strategy, func(t *testing.T) {
+			cfg := &config.Config{Version: 1, Dotfiles: config.Dotfiles{Strategy: tt.strategy}}
+			r := Validate(cfg, "")
+			if tt.wantErr && r.ErrorCount() == 0 {
+				t.Errorf("expected error for strategy %q", tt.strategy)
+			}
+			if !tt.wantErr && r.ErrorCount() > 0 {
+				t.Errorf("expected no errors for strategy %q, got %d", tt.strategy, r.ErrorCount())
+			}
+		})
+	}
+}
+
+func TestValidateDotfilesDuplicateDest(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Dotfiles: config.Dotfiles{
+			Strategy: "copy",
+			Templates: []config.Template{
+				{Src: "a.tmpl", Dest: "~/.bashrc"},
+				{Src: "b.tmpl", Dest: "~/.bashrc"},
+			},
+		},
+	}
+	r := Validate(cfg, "")
+	if r.ErrorCount() == 0 {
+		t.Fatal("expected error for duplicate dest, got none")
+	}
+	found := false
+	for _, f := range r.Findings {
+		if f.Category == "dotfiles" && contains(f.Message, "duplicate") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate dest finding, got: %+v", r.Findings)
+	}
+}
+
+func TestValidateDotfilesEmptyFields(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Dotfiles: config.Dotfiles{
+			Strategy: "copy",
+			Templates: []config.Template{
+				{Src: "", Dest: "~/.bashrc"},
+				{Src: "b.tmpl", Dest: ""},
+			},
+		},
+	}
+	r := Validate(cfg, "")
+	if r.ErrorCount() < 2 {
+		t.Errorf("expected 2 errors for empty src/dest, got %d", r.ErrorCount())
+	}
+}
+
+func TestValidateDotfilesSourceExists(t *testing.T) {
+	dir := t.TempDir()
+	// create a template file
+	if err := os.WriteFile(filepath.Join(dir, "exists.tmpl"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Version: 1,
+		Dotfiles: config.Dotfiles{
+			Strategy: "copy",
+			Templates: []config.Template{
+				{Src: "exists.tmpl", Dest: "~/.bashrc"},
+				{Src: "missing.tmpl", Dest: "~/.zshrc"},
+			},
+		},
+	}
+	r := Validate(cfg, dir)
+
+	// missing template should be a warning, not an error
+	foundWarn := false
+	for _, f := range r.Findings {
+		if f.Category == "dotfiles" && f.Severity == SeverityWarning && contains(f.Message, "missing.tmpl") {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Errorf("expected warning for missing template src, got: %+v", r.Findings)
+	}
+}
+
+func TestValidatePackagesUnknownManager(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Packages: config.Packages{
+			Common: []string{"git", "weirdmgr: foo"},
+		},
+	}
+	r := Validate(cfg, "")
+	foundWarn := false
+	for _, f := range r.Findings {
+		if f.Category == "packages" && contains(f.Message, "weirdmgr") {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Errorf("expected warning for unknown package manager, got: %+v", r.Findings)
+	}
+}
+
+func TestValidateSecretsNoProvider(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Secrets: config.Secrets{
+			Mappings: []config.Mapping{
+				{Key: "foo"},
+			},
+		},
+	}
+	r := Validate(cfg, "")
+	if r.ErrorCount() == 0 {
+		t.Errorf("expected error for mappings without provider")
+	}
+}
+
+func TestValidateSecretsInvalidProvider(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Secrets: config.Secrets{
+			Provider: "nonsense",
+		},
+	}
+	r := Validate(cfg, "")
+	if r.ErrorCount() == 0 {
+		t.Errorf("expected error for invalid provider")
+	}
+}
+
+func TestValidateSecretsValidProvider(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Secrets: config.Secrets{
+			Provider: "env",
+			Mappings: []config.Mapping{
+				{Key: "API_TOKEN", Inject: map[string]string{"~/.env": "TOKEN={{.Key}}"}},
+			},
+		},
+	}
+	r := Validate(cfg, "")
+	if r.ErrorCount() > 0 {
+		t.Errorf("expected no errors for valid env provider, got: %+v", r.Findings)
+	}
+}
+
+func TestValidateSecretsEmptyKey(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Secrets: config.Secrets{
+			Provider: "env",
+			Mappings: []config.Mapping{
+				{Key: "", Inject: map[string]string{"~/.env": "X={{.Key}}"}},
+			},
+		},
+	}
+	r := Validate(cfg, "")
+	if r.ErrorCount() == 0 {
+		t.Errorf("expected error for empty secret key")
+	}
+}
+
+func TestValidateProfiles(t *testing.T) {
+	t.Run("empty profile warns", func(t *testing.T) {
+		cfg := &config.Config{
+			Version: 1,
+			Profiles: map[string]config.Profile{
+				"empty": {},
+			},
+		}
+		r := Validate(cfg, "")
+		found := false
+		for _, f := range r.Findings {
+			if f.Category == "profiles" && contains(f.Message, "empty") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected warning for empty profile, got: %+v", r.Findings)
+		}
+	})
+
+	t.Run("valid profiles pass", func(t *testing.T) {
+		cfg := &config.Config{
+			Version: 1,
+			Profiles: map[string]config.Profile{
+				"work":     {Packages: []string{"slack"}},
+				"personal": {Packages: []string{"discord"}},
+			},
+		}
+		r := Validate(cfg, "")
+		if r.ErrorCount() > 0 {
+			t.Errorf("expected no errors, got: %+v", r.Findings)
+		}
+	})
+}
+
+func TestReportHasErrors(t *testing.T) {
+	r := Report{Findings: []Finding{{SeverityWarning, "x", "y"}}}
+	if r.HasErrors() {
+		t.Error("warnings-only report should not have errors")
+	}
+
+	r.Findings = append(r.Findings, Finding{SeverityError, "x", "z"})
+	if !r.HasErrors() {
+		t.Error("report with error should report HasErrors")
+	}
+}
+
+func TestReportCounts(t *testing.T) {
+	r := Report{Findings: []Finding{
+		{SeverityError, "a", "1"},
+		{SeverityError, "b", "2"},
+		{SeverityWarning, "c", "3"},
+	}}
+	if r.ErrorCount() != 2 {
+		t.Errorf("ErrorCount = %d, want 2", r.ErrorCount())
+	}
+	if r.WarnCount() != 1 {
+		t.Errorf("WarnCount = %d, want 1", r.WarnCount())
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || (len(s) > 0 && stringContains(s, substr)))
+}
+
+func stringContains(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
