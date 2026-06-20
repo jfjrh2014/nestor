@@ -338,3 +338,14 @@ profiles:
 - 12 new tests (version, strategy, dup dest, empty fields, source exists, unknown mgr, no provider, invalid provider, valid provider, empty key, profiles, report counts)
 - All 80 tests pass. Build clean. Vet clean. Pushed.
 - Next: Phase 4 item #13 (`nestor restore --from <url>`) — last remaining planned feature
+
+### 2026-06-20 — Daily dev session #13 — FINAL PLANNED FEATURE
+
+- Built `nestor restore --from <url>` — Phase 4 item #13: pull config from remote URL
+- `internal/restore`: Fetch (HTTP GET, 10MB cap, 30s timeout), Validate (parses + checks config), Write (overwrite protection + nested dir creation), Preview (human-readable summary)
+- Security: rejects `file://`, `ftp://`, and other non-http(s) schemes. Refuses to overwrite without `--force`.
+- `cmd/restore`: `--from <url>` (required), `--dry-run`, `-o/--output`, `--force` flags
+- Exported `config.Config.Validate()` so restore can validate without disk writes
+- 7 new tests + subtests (URL validation x7 schemes, fetch via httptest server, config validation x5, write new/overwrite/force/nested-dirs, preview output, file:// rejection)
+- **All 90 tests pass. Build clean. Vet clean. Pushed.**
+- 🎉 ALL 15 planned features across 4 phases are now complete.
