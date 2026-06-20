@@ -105,6 +105,13 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Validate checks the config for required fields and applies defaults.
+// Exported so other packages (e.g. restore) can validate parsed configs
+// without writing to disk.
+func (c *Config) Validate() error {
+	return c.validate()
+}
+
 func (c *Config) validate() error {
 	if c.Version == 0 {
 		return fmt.Errorf("config version is required")
