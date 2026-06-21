@@ -11,6 +11,7 @@ import (
 	"github.com/jfjrh2014/nestor/internal/packages"
 	"github.com/jfjrh2014/nestor/internal/platform"
 	"github.com/jfjrh2014/nestor/internal/secrets"
+	"github.com/jfjrh2014/nestor/internal/shell"
 	"github.com/jfjrh2014/nestor/internal/snapshot"
 	"github.com/jfjrh2014/nestor/internal/ui"
 	"github.com/spf13/cobra"
@@ -208,10 +209,67 @@ func runUp(ctx context.Context) error {
 		}
 	}
 
-	// TODO: configure shell from cfg.Shells
+	// Step 6: configure shell
+	p.Header("shell")
+	configureShell(p, cfg)
 
 	p.Header("result")
 	p.OK("environment is up")
 
 	return nil
+}
+
+// configureShell detects the current shell and sets up plugins. GitHub-type
+// plugins are cloned shallow and sourced in the shell rc file via an idempotent
+// managed block. Named plugins (standalone tools like starship) are skipped.
+func configureShell(p *ui.Printer, cfg *config.Config) {
+	currentShell, err := shell.Detect()
+	if err != nil {
+		p.Info("no shell detected — skipping plugin setup")
+		return
+	}
+
+	if cfg.Shells.Default != "" && cfg.Shells.Default != currentShell {
+		p.Detail("configured default", cfg.Shells.Default)
+		p.Info(fmt.Sprintf("current shell is %s — skipping default change (manual step)", currentShell))
+	} else {
+		p.OK(fmt.Sprintf("shell: %s", currentShell))
+	}
+
+	if len(cfg.Shells.Plugins) == 0 {
+		p.Info("no shell plugins declared")
+		return
+	}
+
+	p.Info(fmt.Sprintf("processing %d shell plugins", len(cfg.Shells.Plugins)))
+	results := shell.InstallPlugins(cfg.Shells.Plugins)
+
+	installed, skipped, failedCount := 0, 0, 0
+	for _, r := range results {
+		switch r.Status {
+		case shell.StatusInstalled:
+			installed++
+			p.OK(r.Plugin.Raw)
+		case shell.StatusSkipped:
+			skipped++
+		case shell.StatusError:
+			failedCount++
+			p.Error(fmt.Sprintf("%s: %v", r.Plugin.Raw, r.Err))
+		}
+	}
+	p.Info(fmt.Sprintf("%d installed, %d skipped (standalone), %d failed", installed, skipped, failedCount))
+
+	// Write source lines into the rc file (idempotent)
+	rcPath := shell.RCFile(currentShell)
+	if rcPath == "" {
+		p.Info(fmt.Sprintf("no known rc file for %s — skipping source block", currentShell))
+		return
+	}
+
+	sourceLines := shell.SourceLines(results)
+	if err := shell.WriteSourceBlock(rcPath, sourceLines); err != nil {
+		p.Error(fmt.Sprintf("writing source block: %v", err))
+		return
+	}
+	p.OK(fmt.Sprintf("shell config updated: %s", rcPath))
 }
