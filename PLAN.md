@@ -349,3 +349,14 @@ profiles:
 - 7 new tests + subtests (URL validation x7 schemes, fetch via httptest server, config validation x5, write new/overwrite/force/nested-dirs, preview output, file:// rejection)
 - **All 90 tests pass. Build clean. Vet clean. Pushed.**
 - 🎉 ALL 15 planned features across 4 phases are now complete.
+
+### 2026-06-21 — Daily dev session #14
+
+- Built shell plugin setup — the missing TODO stub from `up.go` Step 6
+- `internal/shell`: Detect (current shell via $SHELL), RCFile (zsh/bash rc paths), ParsePlugin (github vs named), InstallPlugins (shallow git clone to ~/.config/nestor/plugins), SourceLines (generate source entries), WriteSourceBlock (idempotent marker-wrapped block in rc file)
+- Wired into `up.go` as Step 6 — replaces the old `// TODO: configure shell` line
+- Idempotent: re-runs update the managed block in place without clobbering user content
+- Named plugins (starship, eza) are skipped — expected as system packages
+- 8 new tests (parse plugin, rc file, source lines + dedup, new file, idempotent update, empty lines, detect, named-only install)
+- All 98 tests pass. Build clean. Vet clean. Pushed.
+- Next: polish pass — README command table is stale (missing edit, secrets, profiles, rollback, snapshots, dashboard, ci, restore, import)
