@@ -81,12 +81,24 @@ profiles:
 | Command | Description |
 |---|---|
 | `nestor init` | Create a starter nestor.yml |
-| `nestor up` | Bootstrap everything from config |
+| `nestor up [--profile <name>]` | Bootstrap packages, dotfiles, secrets, shell from config |
 | `nestor diff` | Show drift between config and live state |
-| `nestor sync` | Capture current machine into config |
-| `nestor list` | Show all managed items and status |
-| `nestor doctor` | Health check everything |
-| `nestor import [chezmoi\|yadm\|brewfile]` | Import from an existing dotfile manager |
+| `nestor sync` | Capture current machine state into config |
+| `nestor list` | Show all managed items with install status |
+| `nestor add [package\|dotfile\|secret] <name>` | Interactively add to config |
+| `nestor doctor` | Health check: packages, dotfiles, secrets, provider |
+| `nestor edit <template-src>` | Edit a template in `$EDITOR`, preview rendered output |
+| `nestor secrets inject` | Resolve and inject secrets into dotfiles |
+| `nestor secrets check` | Dry-run: verify provider reachable, every key resolves |
+| `nestor profiles` | List all config profiles with package counts |
+| `nestor rollback [snapshot-id]` | Restore dotfiles from a snapshot |
+| `nestor snapshots` | List available dotfile snapshots |
+| `nestor dashboard` | Interactive TUI: packages, dotfiles, secrets at a glance |
+| `nestor ci [--quiet]` | Validate config statically; exits non-zero on errors |
+| `nestor restore --from <url> [--force] [-o <path>]` | Pull a nestor.yml from a remote URL |
+| `nestor import [chezmoi\|yadm\|brewfile] [--dry-run]` | Import from existing tools, auto-detect if none given |
+
+`nestor up` auto-snapshots dotfiles before deploying. Snapshots are restored with `nestor rollback`.
 
 ## Design Principles
 
