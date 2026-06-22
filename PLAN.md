@@ -360,3 +360,11 @@ profiles:
 - 8 new tests (parse plugin, rc file, source lines + dedup, new file, idempotent update, empty lines, detect, named-only install)
 - All 98 tests pass. Build clean. Vet clean. Pushed.
 - Next: polish pass — README command table is stale (missing edit, secrets, profiles, rollback, snapshots, dashboard, ci, restore, import)
+
+### 2026-06-22 — Daily dev session #15 — polish pass
+
+- README command table updated: 7 → 17 commands. Documented all flags (--profile, --quiet, --force, --dry-run, -o).
+- Added snapshot/rollback note under command table.
+- Scanned codebase for TODOs/FIXMEs/HACKs — zero remaining in code (only journal references in PLAN.md).
+- All 126 tests pass. Build clean. Vet clean. Pushed.
+- Project is feature-complete with clean docs. Ready for v0.1 tag.
