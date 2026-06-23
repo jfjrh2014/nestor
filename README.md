@@ -97,6 +97,7 @@ profiles:
 | `nestor ci [--quiet]` | Validate config statically; exits non-zero on errors |
 | `nestor restore --from <url> [--force] [-o <path>]` | Pull a nestor.yml from a remote URL |
 | `nestor import [chezmoi\|yadm\|brewfile] [--dry-run]` | Import from existing tools, auto-detect if none given |
+| `nestor version` | Show version, commit, and build date |
 
 `nestor up` auto-snapshots dotfiles before deploying. Snapshots are restored with `nestor rollback`.
 
