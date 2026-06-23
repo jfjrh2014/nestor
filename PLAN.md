@@ -368,3 +368,14 @@ profiles:
 - Scanned codebase for TODOs/FIXMEs/HACKs — zero remaining in code (only journal references in PLAN.md).
 - All 126 tests pass. Build clean. Vet clean. Pushed.
 - Project is feature-complete with clean docs. Ready for v0.1 tag.
+
+### 2026-06-23 — Daily dev session #16
+
+- Added `nestor version` command with ldflags injection (main.version/commit/date)
+- main.go: build-time vars + `cmd.SetVersion()` wires ldflags into the binary
+- cmd/version.go: outputs version, commit, build date via cobra's writer
+- 2 new tests (output format, SetVersion setter) — all 128 pass
+- Wrote GitHub Actions CI (ci.yml: Go 1.19/1.21/1.22 matrix + golangci-lint) and release pipeline (release.yml: cross-compile linux/darwin/windows, auto-release with checksums on tag)
+- ⚠️ Workflow files blocked from push — token lacks `workflow` scope. Files exist locally at `.github/workflows/` but couldn't push. Needs manual push or token with workflow scope.
+- Build clean. Vet clean. 128 tests pass.
+- Next: tag v0.1 once CI is up
