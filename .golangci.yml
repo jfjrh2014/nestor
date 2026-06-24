@@ -1,0 +1,25 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+
+linters-settings:
+  revive:
+    severity: warning
+
+issues:
+  exclude-rules:
+    # Tests legitimately use magic values and short variable names.
+    - path: _test\.go
+      linters:
+        - revive
+        - misspell

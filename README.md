@@ -21,6 +21,14 @@ nestor does what they all do, but simple and beautiful.
 go install github.com/jfjrh2014/nestor@latest
 ```
 
+Or build from source:
+
+```bash
+git clone https://github.com/jfjrh2014/nestor.git
+cd nestor
+make install
+```
+
 ## Quick Start
 
 ```bash
@@ -100,6 +108,34 @@ profiles:
 | `nestor version` | Show version, commit, and build date |
 
 `nestor up` auto-snapshots dotfiles before deploying. Snapshots are restored with `nestor rollback`.
+
+## Shell Completion
+
+nestor generates completion scripts for bash, zsh, fish, and powershell:
+
+```bash
+# bash
+nestor completion bash > /etc/bash_completion.d/nestor
+
+# zsh
+nestor completion zsh > "${fpath[1]}/_nestor"
+
+# fish
+nestor completion fish > ~/.config/fish/completions/nestor.fish
+
+# powershell
+nestor completion powershell | Out-String | Invoke-Expression
+```
+
+## Development
+
+```bash
+make test      # run tests
+make vet       # go vet
+make lint      # golangci-lint (install from https://golangci-lint.run)
+make build     # compile with version info
+make release   # cross-compile binaries + checksums into dist/
+```
 
 ## Design Principles
 
