@@ -379,3 +379,13 @@ profiles:
 - ⚠️ Workflow files blocked from push — token lacks `workflow` scope. Files exist locally at `.github/workflows/` but couldn't push. Needs manual push or token with workflow scope.
 - Build clean. Vet clean. 128 tests pass.
 - Next: tag v0.1 once CI is up
+
+### 2026-06-24 — Daily dev session #17 — release prep
+
+- Added LICENSE file (MIT) — README claimed it but the file was missing
+- Added Makefile: build, test, vet, lint, install, release (cross-compile linux/darwin/windows amd64/arm64 + SHA256 checksums), clean, release-dry
+- Added .golangci.yml config: errcheck, gosimple, govet, ineffassign, staticcheck, unused, misspell, revive (test files exempted from revive/misspell)
+- README: documented shell completion (bash/zsh/fish/powershell), build-from-source install, development make targets
+- All 128 tests pass. Build clean (with ldflags injection verified). Vet clean. Pushed (commit 0f45351).
+- ⚠️ CI/release workflows (.github/workflows/) still blocked from push — token lacks `workflow` scope. Files ready locally.
+- Next: tag v0.1 once workflows are pushed
