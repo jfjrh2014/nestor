@@ -389,3 +389,15 @@ profiles:
 - All 128 tests pass. Build clean (with ldflags injection verified). Vet clean. Pushed (commit 0f45351).
 - ⚠️ CI/release workflows (.github/workflows/) still blocked from push — token lacks `workflow` scope. Files ready locally.
 - Next: tag v0.1 once workflows are pushed
+
+### 2026-06-25 — Daily dev session #18 — flaky test fix + worker injection refactor
+
+- Fixed flaky secrets tests (TestSecretsCheckNoSecrets, TestSecretsCheckMissingKey, TestSecretsInjectCreatesFile, intermittently TestSecretsCheckEnvProvider)
+- Root cause: test helpers captured output via os.Pipe + goroutine with a single Read(), which truncated output when flushed across multiple writes — a genuine data race
+- Refactored runSecretsInject/runSecretsCheck to accept an io.Writer parameter instead of hardcoding os.Stdout, so tests pass a bytes.Buffer directly
+- Eliminated all pipe/goroutine/channel code from test helpers — simpler and race-free
+- Verified: all 4 secrets tests pass 10 consecutive runs, full suite passes 3x consecutive
+- All 128 tests pass. Build clean. Vet clean. Pushed (commit e6609d4).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope)
+- Next: tag v0.1
+
