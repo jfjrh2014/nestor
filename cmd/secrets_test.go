@@ -113,36 +113,14 @@ secrets:
 	}
 }
 
-// runSecretsCheckForTest runs the check logic with a given config path and
-// captures output. Returns 0 on success, 1 on error.
+// runSecretsCheckForTest runs the check logic with output written directly to
+// the provided buffer. Returns 0 on success, 1 on error.
 func runSecretsCheckForTest(t *testing.T, cfgPath string, out *bytes.Buffer) int {
 	t.Helper()
 	cfgFile = cfgPath
 	defer func() { cfgFile = "" }()
 
-	oldStdout := os.Stdout
-	defer func() { os.Stdout = oldStdout }()
-
-	// The runSecretsCheck creates its own ui.New(os.Stdout), so we need to
-	// capture via a pipe.
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	defer func() {
-		os.Stdout = oldStdout
-	}()
-
-	done := make(chan struct{})
-	go func() {
-		buf := make([]byte, 8192)
-		n, _ := r.Read(buf)
-		out.Write(buf[:n])
-		close(done)
-	}()
-
-	err := runSecretsCheck(context.Background())
-	w.Close()
-	<-done
-
+	err := runSecretsCheck(context.Background(), out)
 	if err != nil {
 		return 1
 	}
@@ -155,24 +133,7 @@ func runSecretsInjectForTest(t *testing.T, cfgPath string, out *bytes.Buffer) in
 	cfgFile = cfgPath
 	defer func() { cfgFile = "" }()
 
-	oldStdout := os.Stdout
-	defer func() { os.Stdout = oldStdout }()
-
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	done := make(chan struct{})
-	go func() {
-		buf := make([]byte, 8192)
-		n, _ := r.Read(buf)
-		out.Write(buf[:n])
-		close(done)
-	}()
-
-	err := runSecretsInject(context.Background())
-	w.Close()
-	<-done
-
+	err := runSecretsInject(context.Background(), out)
 	if err != nil {
 		return 1
 	}
@@ -182,6 +143,6 @@ func runSecretsInjectForTest(t *testing.T, cfgPath string, out *bytes.Buffer) in
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write %s: %v", path, err)
 	}
 }

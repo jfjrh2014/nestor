@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -25,7 +26,7 @@ var secretsInjectCmd = &cobra.Command{
 	Use:   "inject",
 	Short: "Resolve and inject all configured secrets",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSecretsInject(cmd.Context())
+		return runSecretsInject(cmd.Context(), os.Stdout)
 	},
 }
 
@@ -33,7 +34,7 @@ var secretsCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Verify all secrets are accessible (dry run, no writes)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSecretsCheck(cmd.Context())
+		return runSecretsCheck(cmd.Context(), os.Stdout)
 	},
 }
 
@@ -52,8 +53,8 @@ func buildSecretMappings(cfgMappings []config.Mapping) []secrets.Mapping {
 	return out
 }
 
-func runSecretsInject(ctx context.Context) error {
-	p := ui.New(os.Stdout)
+func runSecretsInject(ctx context.Context, w io.Writer) error {
+	p := ui.New(w)
 
 	path := configPath()
 	cfg, err := config.Load(path)
@@ -112,8 +113,8 @@ func runSecretsInject(ctx context.Context) error {
 	return nil
 }
 
-func runSecretsCheck(ctx context.Context) error {
-	p := ui.New(os.Stdout)
+func runSecretsCheck(ctx context.Context, w io.Writer) error {
+	p := ui.New(w)
 	issues := 0
 
 	path := configPath()
