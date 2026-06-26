@@ -401,3 +401,15 @@ profiles:
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope)
 - Next: tag v0.1
 
+### 2026-06-26 — Daily dev session #19 — profile completion
+
+- Profiles were packages-only per the code, but PLAN.md spec said "different packages, dotfile variants, secrets"
+- Extended Profile struct: added Dotfiles ([]Template) and SecretMappings ([]Mapping) fields
+- Added ProfileDotfiles() and ProfileSecretMappings() accessors on Config
+- `nestor up --profile X` now layers dotfile templates and secret mappings on top of base config (in addition to packages)
+- `nestor profiles` output shows counts for all three categories
+- 4 new tests (ProfileDotfiles, ProfileSecretMappings, LoadProfileWithDotfilesAndSecrets, existing ProfilePackages still passes)
+- 131 tests pass (all including subtests). Build clean. Vet clean. Pushed (commit fc9a61f).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked
+
