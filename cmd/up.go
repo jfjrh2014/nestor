@@ -137,7 +137,7 @@ func runUp(ctx context.Context) error {
 
 	// Step 4: deploy dotfiles
 	p.Header("dotfiles")
-	if len(cfg.Dotfiles.Templates) == 0 {
+	if len(cfg.Dotfiles.Templates) == 0 && len(cfg.ProfileDotfiles(profileName)) == 0 {
 		p.Info("no templates declared")
 	} else {
 		strategy := dotfiles.Strategy(cfg.Dotfiles.Strategy)
@@ -153,6 +153,15 @@ func runUp(ctx context.Context) error {
 		temps := make([]dotfiles.Template, 0, len(cfg.Dotfiles.Templates))
 		for _, t := range cfg.Dotfiles.Templates {
 			temps = append(temps, dotfiles.Template{Src: t.Src, Dest: t.Dest})
+		}
+
+		// Layer profile-specific dotfiles on top
+		profileTemps := cfg.ProfileDotfiles(profileName)
+		if len(profileTemps) > 0 {
+			p.OK(fmt.Sprintf("profile %s: %d extra dotfiles", profileName, len(profileTemps)))
+			for _, t := range profileTemps {
+				temps = append(temps, dotfiles.Template{Src: t.Src, Dest: t.Dest})
+			}
 		}
 
 		p.Info(fmt.Sprintf("deploying %d templates (%s strategy)", len(temps), strategy))
@@ -174,25 +183,33 @@ func runUp(ctx context.Context) error {
 		p.Info(fmt.Sprintf("%d deployed, %d failed", deployed, failedCount))
 	}
 
-	// Step 5: inject secrets
+	// Step 5: inject secrets (base + profile layer)
 	p.Header("secrets")
-	if len(cfg.Secrets.Mappings) == 0 || cfg.Secrets.Provider == "" {
+	profileSecrets := cfg.ProfileSecretMappings(profileName)
+	if (len(cfg.Secrets.Mappings) == 0 && len(profileSecrets) == 0) || cfg.Secrets.Provider == "" {
 		p.Info("no secrets declared")
 	} else {
 		prov, err := secrets.NewProvider(cfg.Secrets.Provider)
 		if err != nil {
 			p.Error(fmt.Sprintf("provider %s: %v", cfg.Secrets.Provider, err))
 		} else {
-			p.Info(fmt.Sprintf("resolving %d secrets via %s", len(cfg.Secrets.Mappings), prov.Name()))
-			sMappings := make([]secrets.Mapping, 0, len(cfg.Secrets.Mappings))
+			// Merge base + profile secret mappings
+			allMappings := make([]secrets.Mapping, 0, len(cfg.Secrets.Mappings)+len(profileSecrets))
 			for _, m := range cfg.Secrets.Mappings {
-				sMappings = append(sMappings, secrets.Mapping{Key: m.Key, Inject: m.Inject})
+				allMappings = append(allMappings, secrets.Mapping{Key: m.Key, Inject: m.Inject})
 			}
-			vals, err := secrets.ResolveAll(prov, sMappings)
+			if len(profileSecrets) > 0 {
+				p.OK(fmt.Sprintf("profile %s: %d extra secrets", profileName, len(profileSecrets)))
+				for _, m := range profileSecrets {
+					allMappings = append(allMappings, secrets.Mapping{Key: m.Key, Inject: m.Inject})
+				}
+			}
+			p.Info(fmt.Sprintf("resolving %d secrets via %s", len(allMappings), prov.Name()))
+			vals, err := secrets.ResolveAll(prov, allMappings)
 			if err != nil {
 				p.Error(fmt.Sprintf("resolve: %v", err))
 			} else {
-				results := secrets.InjectAll(vals, sMappings)
+				results := secrets.InjectAll(vals, allMappings)
 				injected, failedCount := 0, 0
 				for _, r := range results {
 					switch r.Status {

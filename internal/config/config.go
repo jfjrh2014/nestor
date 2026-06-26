@@ -60,7 +60,9 @@ type Shells struct {
 // Profile defines a named set of extra packages, dotfile variants, and secrets
 // that layer on top of the base config when activated.
 type Profile struct {
-	Packages []string `yaml:"packages"`
+	Packages        []string  `yaml:"packages"`
+	Dotfiles        []Template `yaml:"dotfiles"`
+	SecretMappings  []Mapping  `yaml:"secrets"`
 }
 
 // ValidProfile returns true if a profile with the given name is defined.
@@ -80,6 +82,30 @@ func (c *Config) ProfilePackages(name string) []string {
 		return nil
 	}
 	return p.Packages
+}
+
+// ProfileDotfiles returns extra dotfile templates for a profile.
+func (c *Config) ProfileDotfiles(name string) []Template {
+	if name == "" {
+		return nil
+	}
+	p, ok := c.Profiles[name]
+	if !ok {
+		return nil
+	}
+	return p.Dotfiles
+}
+
+// ProfileSecretMappings returns extra secret mappings for a profile.
+func (c *Config) ProfileSecretMappings(name string) []Mapping {
+	if name == "" {
+		return nil
+	}
+	p, ok := c.Profiles[name]
+	if !ok {
+		return nil
+	}
+	return p.SecretMappings
 }
 
 // Load reads and parses a nestor.yml file

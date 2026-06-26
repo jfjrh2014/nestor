@@ -186,3 +186,114 @@ func TestProfilePackages(t *testing.T) {
 		t.Error("nonexistent profile should return nil")
 	}
 }
+
+func TestProfileDotfiles(t *testing.T) {
+	cfg := &Config{
+		Profiles: map[string]Profile{
+			"work": {
+				Dotfiles: []Template{
+					{Src: "gitconfig-work.tmpl", Dest: "~/.gitconfig"},
+					{Src: "ssh-config-work.tmpl", Dest: "~/.ssh/config"},
+				},
+			},
+		},
+	}
+
+	got := cfg.ProfileDotfiles("work")
+	if len(got) != 2 {
+		t.Fatalf("work dotfiles = %d, want 2", len(got))
+	}
+	if got[0].Dest != "~/.gitconfig" {
+		t.Errorf("first dotfile dest = %q, want ~/.gitconfig", got[0].Dest)
+	}
+
+	// empty name returns nil
+	if cfg.ProfileDotfiles("") != nil {
+		t.Error("empty profile name should return nil")
+	}
+	// nonexistent returns nil
+	if cfg.ProfileDotfiles("ghost") != nil {
+		t.Error("nonexistent profile should return nil")
+	}
+}
+
+func TestProfileSecretMappings(t *testing.T) {
+	cfg := &Config{
+		Profiles: map[string]Profile{
+			"work": {
+				SecretMappings: []Mapping{
+					{Key: "slack_token", Inject: map[string]string{"~/.config/slack/config": "token: {{.slack_token}}"}},
+				},
+			},
+		},
+	}
+
+	got := cfg.ProfileSecretMappings("work")
+	if len(got) != 1 {
+		t.Fatalf("work secrets = %d, want 1", len(got))
+	}
+	if got[0].Key != "slack_token" {
+		t.Errorf("secret key = %q, want slack_token", got[0].Key)
+	}
+
+	// empty name returns nil
+	if cfg.ProfileSecretMappings("") != nil {
+		t.Error("empty profile name should return nil")
+	}
+	// nonexistent returns nil
+	if cfg.ProfileSecretMappings("ghost") != nil {
+		t.Error("nonexistent profile should return nil")
+	}
+}
+
+func TestLoadProfileWithDotfilesAndSecrets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nestor.yml")
+	body := `version: 1
+packages:
+  common: [git]
+dotfiles:
+  strategy: copy
+  templates: []
+secrets:
+  provider: env
+profiles:
+  work:
+    packages: [slack]
+    dotfiles:
+      - src: gitconfig-work.tmpl
+        dest: ~/.gitconfig
+    secrets:
+      - key: slack_token
+        inject:
+          ~/.config/slack/config: "token: {{.slack_token}}"
+`
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	prof, ok := cfg.Profiles["work"]
+	if !ok {
+		t.Fatal("work profile not found")
+	}
+	if len(prof.Packages) != 1 || prof.Packages[0] != "slack" {
+		t.Errorf("packages = %v, want [slack]", prof.Packages)
+	}
+	if len(prof.Dotfiles) != 1 {
+		t.Fatalf("dotfiles = %d, want 1", len(prof.Dotfiles))
+	}
+	if prof.Dotfiles[0].Dest != "~/.gitconfig" {
+		t.Errorf("dotfile dest = %q, want ~/.gitconfig", prof.Dotfiles[0].Dest)
+	}
+	if len(prof.SecretMappings) != 1 {
+		t.Fatalf("secrets = %d, want 1", len(prof.SecretMappings))
+	}
+	if prof.SecretMappings[0].Key != "slack_token" {
+		t.Errorf("secret key = %q, want slack_token", prof.SecretMappings[0].Key)
+	}
+}

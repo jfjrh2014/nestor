@@ -38,9 +38,16 @@ var profilesCmd = &cobra.Command{
 
 		for _, name := range names {
 			prof := cfg.Profiles[name]
-			p.OK(fmt.Sprintf("%s (%d packages)", name, len(prof.Packages)))
+			p.OK(fmt.Sprintf("%s (%d packages, %d dotfiles, %d secrets)",
+				name, len(prof.Packages), len(prof.Dotfiles), len(prof.SecretMappings)))
 			for _, pkg := range prof.Packages {
 				p.Detail("package", pkg)
+			}
+			for _, df := range prof.Dotfiles {
+				p.Detail("dotfile", df.Dest)
+			}
+			for _, sec := range prof.SecretMappings {
+				p.Detail("secret", sec.Key)
 			}
 		}
 
