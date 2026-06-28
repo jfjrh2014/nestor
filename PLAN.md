@@ -413,3 +413,14 @@ profiles:
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
 
+### 2026-06-28 — Daily dev session #20 — deep config validation
+
+- Old `validate()` only checked version and strategy — malformed nestor.yml failed mid-deploy with cryptic runtime errors
+- Rewrote `validate()`: now checks secret provider validity, empty template src/dest, duplicate destinations, secret mappings with empty key or inject targets, and the same checks (duplicates, empties) applied to nested profile dotfiles/secrets
+- 10 new tests covering: unknown provider, empty src, empty dest, duplicate dest, empty secret key, empty inject map, profile empty src, profile duplicate dest, profile secret missing key, valid config acceptance
+- All 140 tests pass. Build clean. Vet clean. Pushed (commit 6486004).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked
+
+
+
