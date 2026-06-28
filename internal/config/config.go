@@ -138,6 +138,15 @@ func (c *Config) Validate() error {
 	return c.validate()
 }
 
+// validProviders is the set of acceptable secrets.provider values.
+var validProviders = map[string]bool{
+	"":          true, // default env
+	"env":       true,
+	"1password": true,
+	"bitwarden": true,
+	"vault":     true,
+}
+
 func (c *Config) validate() error {
 	if c.Version == 0 {
 		return fmt.Errorf("config version is required")
@@ -151,6 +160,66 @@ func (c *Config) validate() error {
 	if c.Dotfiles.Strategy != "copy" && c.Dotfiles.Strategy != "symlink" {
 		return fmt.Errorf("dotfiles.strategy must be 'copy' or 'symlink', got %q", c.Dotfiles.Strategy)
 	}
+
+	// Validate secret provider is known (only when provider or mappings are declared).
+	if !validProviders[c.Secrets.Provider] {
+		return fmt.Errorf("secrets.provider %q is not valid (allowed: env, 1password, bitwarden, vault)", c.Secrets.Provider)
+	}
+
+	// Validate templates: src and dest must be non-empty.
+	for i, t := range c.Dotfiles.Templates {
+		if t.Src == "" {
+			return fmt.Errorf("dotfiles.templates[%d]: src is empty", i)
+		}
+		if t.Dest == "" {
+			return fmt.Errorf("dotfiles.templates[%d]: dest is empty (src=%q)", i, t.Src)
+		}
+	}
+
+	// Duplicate destinations cause two templates to overwrite each other.
+	dup := make(map[string]bool)
+	for _, t := range c.Dotfiles.Templates {
+		if dup[t.Dest] {
+			return fmt.Errorf("dotfiles.templates: duplicate dest %q", t.Dest)
+		}
+		dup[t.Dest] = true
+	}
+
+	// Validate secret mappings: key non-empty, inject targets non-empty.
+	for i, m := range c.Secrets.Mappings {
+		if m.Key == "" {
+			return fmt.Errorf("secrets.mappings[%d]: key is empty", i)
+		}
+		if len(m.Inject) == 0 {
+			return fmt.Errorf("secrets.mappings[%d]: inject is empty (key=%q)", i, m.Key)
+		}
+	}
+
+	// Validate profiles: same field checks applied to nested dotfiles/secrets.
+	for name, prof := range c.Profiles {
+		pdup := make(map[string]bool)
+		for i, t := range prof.Dotfiles {
+			if t.Src == "" {
+				return fmt.Errorf("profiles.%s.dotfiles[%d]: src is empty", name, i)
+			}
+			if t.Dest == "" {
+				return fmt.Errorf("profiles.%s.dotfiles[%d]: dest is empty (src=%q)", name, i, t.Src)
+			}
+			if pdup[t.Dest] {
+				return fmt.Errorf("profiles.%s.dotfiles: duplicate dest %q", name, t.Dest)
+			}
+			pdup[t.Dest] = true
+		}
+		for i, m := range prof.SecretMappings {
+			if m.Key == "" {
+				return fmt.Errorf("profiles.%s.secrets[%d]: key is empty", name, i)
+			}
+			if len(m.Inject) == 0 {
+				return fmt.Errorf("profiles.%s.secrets[%d]: inject is empty (key=%q)", name, i, m.Key)
+			}
+		}
+	}
+
 	return nil
 }
 

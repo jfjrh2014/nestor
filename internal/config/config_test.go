@@ -297,3 +297,162 @@ profiles:
 		t.Errorf("secret key = %q, want slack_token", prof.SecretMappings[0].Key)
 	}
 }
+
+func TestValidateRejectsUnknownProvider(t *testing.T) {
+	cfg := &Config{Version: 1, Secrets: Secrets{Provider: "keeper"}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+}
+
+func TestValidateRejectsEmptyTemplateSrc(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Dotfiles: Dotfiles{
+			Strategy:  "copy",
+			Templates: []Template{{Src: "", Dest: "~/.bashrc"}},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for empty src")
+	}
+}
+
+func TestValidateRejectsEmptyTemplateDest(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Dotfiles: Dotfiles{
+			Strategy:  "copy",
+			Templates: []Template{{Src: "bashrc.tmpl", Dest: ""}},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for empty dest")
+	}
+}
+
+func TestValidateRejectsDuplicateDestinations(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Dotfiles: Dotfiles{
+			Strategy: "copy",
+			Templates: []Template{
+				{Src: "a.tmpl", Dest: "~/.bashrc"},
+				{Src: "b.tmpl", Dest: "~/.bashrc"},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for duplicate dest")
+	}
+}
+
+func TestValidateRejectsSecretMappingEmptyKey(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Secrets: Secrets{
+			Provider: "env",
+			Mappings: []Mapping{
+				{Key: "", Inject: map[string]string{"~/.x": "v"}},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for empty secret key")
+	}
+}
+
+func TestValidateRejectsSecretMappingEmptyInject(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Secrets: Secrets{
+			Provider: "env",
+			Mappings: []Mapping{
+				{Key: "token", Inject: map[string]string{}},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for empty inject map")
+	}
+}
+
+func TestValidateRejectsProfileEmptyTemplateSrc(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Profiles: map[string]Profile{
+			"work": {
+				Dotfiles: []Template{{Src: "", Dest: "~/.x"}},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for profile empty src")
+	}
+}
+
+func TestValidateRejectsProfileDuplicateDestinations(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Profiles: map[string]Profile{
+			"work": {
+				Dotfiles: []Template{
+					{Src: "a.tmpl", Dest: "~/.gitconfig"},
+					{Src: "b.tmpl", Dest: "~/.gitconfig"},
+				},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for profile duplicate dest")
+	}
+}
+
+func TestValidateRejectsProfileSecretMissingKey(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Profiles: map[string]Profile{
+			"work": {
+				SecretMappings: []Mapping{
+					{Key: "", Inject: map[string]string{"~/.x": "v"}},
+				},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for profile secret empty key")
+	}
+}
+
+func TestValidateAcceptsValidConfig(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Packages: Packages{Common: []string{"git"}},
+		Dotfiles: Dotfiles{
+			Strategy: "copy",
+			Templates: []Template{
+				{Src: "bashrc.tmpl", Dest: "~/.bashrc"},
+			},
+		},
+		Secrets: Secrets{
+			Provider: "env",
+			Mappings: []Mapping{
+				{Key: "token", Inject: map[string]string{"~/.x": "v"}},
+			},
+		},
+		Profiles: map[string]Profile{
+			"work": {
+				Packages: []string{"slack"},
+				Dotfiles: []Template{
+					{Src: "work.tmpl", Dest: "~/.gitconfig"},
+				},
+				SecretMappings: []Mapping{
+					{Key: "slack_token", Inject: map[string]string{"~/.slack": "t"}},
+				},
+			},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+}
