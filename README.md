@@ -106,8 +106,27 @@ profiles:
 | `nestor restore --from <url> [--force] [-o <path>]` | Pull a nestor.yml from a remote URL |
 | `nestor import [chezmoi\|yadm\|brewfile] [--dry-run]` | Import from existing tools, auto-detect if none given |
 | `nestor version` | Show version, commit, and build date |
+| `nestor push [--remote <url>]` | Commit and push your config to a git remote |
+| `nestor pull [--remote <url>]` | Pull config changes from a git remote |
+| `nestor remote add <url>` | Set the git remote for config sync |
+| `nestor remote show` | Show the configured git remote URL |
+| `nestor remote remove` | Remove the configured git remote |
 
 `nestor up` auto-snapshots dotfiles before deploying. Snapshots are restored with `nestor rollback`.
+
+### Multi-machine sync
+
+Version-control your config across machines with git:
+
+```bash
+# On machine A
+nestor remote add https://github.com/you/dotfiles.git
+nestor push
+
+# On machine B
+nestor pull --remote https://github.com/you/dotfiles.git
+nestor up
+```
 
 ## Shell Completion
 

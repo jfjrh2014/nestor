@@ -422,5 +422,19 @@ profiles:
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
 
+### 2026-06-30 — Daily dev session #21 — remote sync (push/pull/remote)
+
+- Shipped Phase 5 remote sync feature: version-control nestor config across machines via git
+- `internal/vcs`: git delegation layer — Init, WriteGitignore (excludes snapshots/secret files), SetRemote/GetRemote/RemoteSet, Status (porcelain parser with correct XY-code handling), HasChanges, Commit (with built-in GIT_AUTHOR/COMMITTER env), Push, Pull
+- `cmd/push` [--remote <url>]: init repo, stage + commit all changes ("nestor: sync config"), push to origin if configured
+- `cmd/pull` [--remote <url>]: init repo, warn on uncommitted local changes, pull + merge from origin
+- `cmd/remote` with add/show/remove subcommands
+- Writer-injected variants (runPushOut, runPullOut, runRemoteAddOut, runRemoteShowOut, runRemoteRemoveOut) for testability — matches session #18 pattern
+- 11 new tests across vcs package + cmd layer (init/idempotent, gitignore preserved, remote set/get/replace, status clean/untracked/modified, commit noop/creates-history, push local commit, remote add/show/remove, nestorConfigDir from env + local yml)
+- README: documented push/pull/remote commands, added multi-machine sync quickstart
+- All 130 tests pass. Build clean. Vet clean.
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked
+
 
 
