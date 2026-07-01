@@ -436,5 +436,17 @@ profiles:
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
 
+### 2026-07-01 — Daily dev session #22 — drift detection bugfix
+
+- Found and fixed a dead-code bug in nestor's headline feature (drift detection)
+- The `extra` counter in `cmd/diff.go` was declared and printed ("N extra packages not tracked") but never incremented — so diff always reported zero untracked packages, silently defeating half of PLAN.md §4 ("Shows missing, extra, changed")
+- Reused `scanPackages()` (already in sync.go) to surface installed dev packages missing from config; counts them as drift and points users at `nestor sync` to capture
+- Added `untrackedPackages()` pure helper (sorted + deduped output) for testability
+- 5 table-driven unit tests (dedup, sorted, empty cases, all-tracked, all-extra)
+- Verified live: with only `jq` tracked, diff now correctly flags curl/git/vim/wget as extra
+- All 130 tests pass (12/12 packages). Build clean. Vet clean. Pushed (commit 19bcfd4).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope)
+- Next: tag v0.1 once CI unblocked
+
 
 
