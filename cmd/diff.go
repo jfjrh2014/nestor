@@ -60,6 +60,12 @@ func runDiff(ctx context.Context) error {
 		specs = append(specs, packages.ParseSpec(raw, plat.PackageManager))
 	}
 
+	// Names tracked in config, for untracked-package detection.
+	configured := make(map[string]bool, len(specs))
+	for _, s := range specs {
+		configured[s.Name] = true
+	}
+
 	missing, extra := 0, 0
 	for _, s := range specs {
 		mgr, err := packages.NewManager(s.Manager)
@@ -76,13 +82,21 @@ func runDiff(ctx context.Context) error {
 		}
 	}
 
-	if missing == 0 && len(specs) > 0 {
+	// Installed dev packages not declared in config = drift ("extra").
+	untracked := untrackedPackages(configured, scanPackages(plat.PackageManager))
+	for _, name := range untracked {
+		extra++
+		driftCount++
+		p.Info(fmt.Sprintf("extra (not tracked): %s", name))
+	}
+
+	if missing == 0 && extra == 0 && len(specs) > 0 {
 		p.OK(fmt.Sprintf("all %d packages installed", len(specs)))
-	} else if len(specs) == 0 {
+	} else if len(specs) == 0 && extra == 0 {
 		p.Info("no packages declared")
 	}
 	if extra > 0 {
-		p.Info(fmt.Sprintf("%d extra packages not tracked", extra))
+		p.Info(fmt.Sprintf("%d extra package(s) not tracked — run 'nestor sync' to capture", extra))
 	}
 
 	// --- dotfiles ---
@@ -134,4 +148,26 @@ func runDiff(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// untrackedPackages returns installed package names not present in configured,
+// sorted for deterministic output. It is a pure function of its inputs so the
+// drift unit test can exercise it without invoking any real package manager.
+func untrackedPackages(configured map[string]bool, installed []string) []string {
+	seen := make(map[string]bool, len(installed))
+	out := make([]string, 0, len(installed))
+	for _, name := range installed {
+		if configured[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	// Deterministic output order.
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1] > out[j]; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
 }
