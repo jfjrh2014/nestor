@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -40,11 +41,14 @@ func Create(destPaths []string) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	return createIn(base, destPaths)
+}
 
-	id := time.Now().Format("20060102-150405")
-	snapDir := filepath.Join(base, id)
-	if err := os.MkdirAll(snapDir, 0o755); err != nil {
-		return nil, fmt.Errorf("creating snapshot dir: %w", err)
+// createIn is the testable core of Create, operating against an explicit base.
+func createIn(base string, destPaths []string) (*Snapshot, error) {
+	id, snapDir, err := freshSnapshotDir(base)
+	if err != nil {
+		return nil, err
 	}
 
 	snap := &Snapshot{
@@ -74,11 +78,42 @@ func Create(destPaths []string) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(snapDir, "manifest.json"), manifest, 0o644); err != nil {
+	manifestDir := filepath.Dir(filepath.Join(snapDir, "manifest.json"))
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := writeAtomic(filepath.Join(snapDir, "manifest.json"), manifest); err != nil {
 		return nil, err
 	}
 
+	_ = id // id is embedded in snapDir's path; stored in CreatedAt for ordering
 	return snap, nil
+}
+
+// freshSnapshotDir picks a timestamp ID that does not collide with an existing
+// snapshot directory, incrementing the suffix until a free name is found.
+// This guards against same-second overwrites when multiple snaps land close
+// together (e.g. rapid test runs or scripted deploys).
+func freshSnapshotDir(base string) (id string, dir string, err error) {
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return "", "", fmt.Errorf("creating snapshot base: %w", err)
+	}
+	id = time.Now().Format("20060102-150405")
+	dir = filepath.Join(base, id)
+	for i := 1; ; i++ {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+				return "", "", fmt.Errorf("creating snapshot dir: %w", mkErr)
+			}
+			return id, dir, nil
+		}
+		// collision: append a sequential suffix
+		id = fmt.Sprintf("%s-%d", time.Now().Format("20060102-150405"), i)
+		dir = filepath.Join(base, id)
+		if i > 9999 {
+			return "", "", fmt.Errorf("could not allocate snapshot dir after %d attempts", i)
+		}
+	}
 }
 
 // List returns snapshot IDs sorted newest-first.
@@ -87,6 +122,10 @@ func List() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return listIn(base)
+}
+
+func listIn(base string) ([]string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -111,9 +150,12 @@ func Restore(id string) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	return restoreIn(base, id)
+}
 
+func restoreIn(base, id string) (*Snapshot, error) {
 	if id == "" {
-		ids, err := List()
+		ids, err := listIn(base)
 		if err != nil {
 			return nil, err
 		}
@@ -150,9 +192,16 @@ func Delete(id string) error {
 	if err != nil {
 		return err
 	}
+	return deleteIn(base, id)
+}
+
+func deleteIn(base, id string) error {
 	return os.RemoveAll(filepath.Join(base, id))
 }
 
+// copyFile copies src to dest, preserving file mode. It checks the close
+// error on the destination so that write failures (e.g. disk full) are not
+// silently turned into truncated backups.
 func copyFile(src, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
@@ -167,23 +216,63 @@ func copyFile(src, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
 		return err
 	}
 	// preserve mode
 	info, _ := in.Stat()
 	if info != nil {
-		out.Chmod(info.Mode())
+		_ = out.Chmod(info.Mode())
+	}
+	// Close reports deferred write errors (disk full, quota) — check it.
+	if err := out.Close(); err != nil {
+		return err
 	}
 	return nil
 }
 
-// sanitizePath turns an absolute path like /home/user/.gitconfig
-// into a flat relative path safe for a backup dir: home_user_.gitconfig
+// writeAtomic writes data to path, returning an error if the final close fails.
+func writeAtomic(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if _, err := out.Write(data); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// sanitizePath turns an absolute path like /home/user/.config/nestor/foo.conf
+// into a flat relative path safe for a backup dir: home+user+.config+nestor+foo.conf
+//
+// The full path is escaped so that dest files sharing a basename but living in
+// different directories (e.g. ~/.gitconfig and ~/work/.gitconfig) do not clobber
+// each other inside the snapshot dir.
 func sanitizePath(p string) string {
-	return filepath.Base(p) + ".bak"
+	// Clean the path, strip any volume letter on Windows, then replace every
+	// OS path separator with '+' so the result is a single flat file name.
+	clean := filepath.Clean(p)
+	clean = strings.TrimPrefix(clean, "/")
+	if len(clean) >= 2 && clean[1] == ':' {
+		// Windows drive letter (C:foo) — drop the colon
+		clean = string(clean[0]) + clean[2:]
+	}
+	// Replace remaining separators. Empty result (root path) -> "root".
+	flat := strings.ReplaceAll(clean, string(filepath.Separator), "+")
+	if flat == "" {
+		flat = "root"
+	}
+	return flat + ".bak"
 }
 
 func expandHome(p string) string {

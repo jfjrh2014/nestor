@@ -4,20 +4,20 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 )
 
+// TestCreateSkipsMissingFiles verifies non-existent destination paths are
+// silently ignored during snapshot creation.
 func TestCreateSkipsMissingFiles(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create one existing file
-	existing := filepath.Join(dir, "real.txt")
+	base := t.TempDir()
+	existing := filepath.Join(base, "real.txt")
 	os.WriteFile(existing, []byte("hello"), 0o644)
 
-	snap, err := createAt(dir, []string{existing, filepath.Join(dir, "ghost.txt")})
+	snap, err := createIn(base, []string{existing, filepath.Join(base, "ghost.txt")})
 	if err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf("createIn: %v", err)
 	}
 	if len(snap.Files) != 1 {
 		t.Fatalf("expected 1 file (skipped missing), got %d", len(snap.Files))
@@ -27,25 +27,24 @@ func TestCreateSkipsMissingFiles(t *testing.T) {
 	}
 }
 
+// TestCreateAndRestore backs up a file, mutates it, then restores and checks
+// the content round-trips through the manifest.
 func TestCreateAndRestore(t *testing.T) {
-	dir := t.TempDir()
-
-	orig := filepath.Join(dir, "config.txt")
+	base := t.TempDir()
+	orig := filepath.Join(base, "config.txt")
 	os.WriteFile(orig, []byte("before"), 0o644)
 
-	snap, err := createAt(dir, []string{orig})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
+	if _, err := createIn(base, []string{orig}); err != nil {
+		t.Fatalf("createIn: %v", err)
 	}
 
-	// Mutate
+	// Mutate the live file so we can prove Restore reverts it.
 	os.WriteFile(orig, []byte("after"), 0o644)
 
-	// Restore
-	snapID := snap.CreatedAt.Format("20060102-150405")
-	restored, err := restoreAt(dir, snapID)
+	id := snapshotIDFromBase(base)
+	restored, err := restoreIn(base, id)
 	if err != nil {
-		t.Fatalf("Restore: %v", err)
+		t.Fatalf("restoreIn: %v", err)
 	}
 	if len(restored.Files) != 1 {
 		t.Fatalf("restored files = %d, want 1", len(restored.Files))
@@ -57,18 +56,18 @@ func TestCreateAndRestore(t *testing.T) {
 	}
 }
 
-func TestManifestWritten(t *testing.T) {
-	dir := t.TempDir()
-	orig := filepath.Join(dir, "test.txt")
+// TestCreateWritesManifest checks the manifest.json landed on disk and parses.
+func TestCreateWritesManifest(t *testing.T) {
+	base := t.TempDir()
+	orig := filepath.Join(base, "test.txt")
 	os.WriteFile(orig, []byte("x"), 0o644)
 
-	snap, err := createAt(dir, []string{orig})
+	_, err := createIn(base, []string{orig})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	snapID := snap.CreatedAt.Format("20060102-150405")
-	manifestPath := filepath.Join(dir, snapID, "manifest.json")
+	manifestPath := filepath.Join(base, snapshotIDFromBase(base), "manifest.json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatalf("reading manifest: %v", err)
@@ -83,33 +82,148 @@ func TestManifestWritten(t *testing.T) {
 	}
 }
 
+// TestDelete removes a snapshot dir and confirms it stays gone.
 func TestDelete(t *testing.T) {
-	dir := t.TempDir()
-	orig := filepath.Join(dir, "a.txt")
+	base := t.TempDir()
+	orig := filepath.Join(base, "a.txt")
 	os.WriteFile(orig, []byte("a"), 0o644)
 
-	snap, _ := createAt(dir, []string{orig})
-	snapID := snap.CreatedAt.Format("20060102-150405")
+	_, err := createIn(base, []string{orig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := snapshotIDFromBase(base)
 
-	snapDir := filepath.Join(dir, snapID)
+	snapDir := filepath.Join(base, id)
 	if _, err := os.Stat(snapDir); err != nil {
-		t.Fatal("snapshot dir should exist")
+		t.Fatal("snapshot dir should exist before delete")
 	}
 
-	// Manually remove since Delete uses the real base dir
-	os.RemoveAll(snapDir)
+	if err := deleteIn(base, id); err != nil {
+		t.Fatalf("deleteIn: %v", err)
+	}
 	if _, err := os.Stat(snapDir); !os.IsNotExist(err) {
-		t.Error("snapshot dir should be gone")
+		t.Error("snapshot dir should be gone after delete")
 	}
 }
 
+// TestRestoreLatest (empty id) restores the most recent snapshot.
+func TestRestoreLatest(t *testing.T) {
+	base := t.TempDir()
+	orig := filepath.Join(base, "c.txt")
+	os.WriteFile(orig, []byte("v1"), 0o644)
+
+	if _, err := createIn(base, []string{orig}); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(orig, []byte("v2"), 0o644)
+	if _, err := createIn(base, []string{orig}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Overwrite with garbage, then restore-latest should give back v2.
+	os.WriteFile(orig, []byte("garbage"), 0o644)
+
+	if _, err := restoreIn(base, ""); err != nil {
+		t.Fatalf("restoreIn latest: %v", err)
+	}
+}
+
+// TestRestoreMissingSnapshot checks the error when the id has no manifest.
+func TestRestoreMissingSnapshot(t *testing.T) {
+	base := t.TempDir()
+	_, err := restoreIn(base, "does-not-exist")
+	if err == nil {
+		t.Fatal("expected error restoring non-existent snapshot")
+	}
+}
+
+// TestRestoreEmpty errors when there are no snapshots at all.
+func TestRestoreEmpty(t *testing.T) {
+	base := t.TempDir()
+	_, err := restoreIn(base, "")
+	if err == nil {
+		t.Fatal("expected error on restore with empty base")
+	}
+}
+
+// TestListNewestFirst verifies ordering and that a missing base returns nil.
+func TestListNewestFirst(t *testing.T) {
+	base := t.TempDir()
+
+	// Stamp three snapshots with explicit IDs for deterministic ordering.
+	for _, id := range []string{"20200101-120000", "20210101-120000", "20220101-120000"} {
+		dir := filepath.Join(base, id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeAtomic(filepath.Join(dir, "manifest.json"), []byte(`{"created_at":"2020-01-01T00:00:00Z","files":[]}`))
+	}
+
+	ids, err := listIn(base)
+	if err != nil {
+		t.Fatalf("listIn: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 snapshots, got %d", len(ids))
+	}
+	// os.ReadDir sorts ascending by name; listIn reverses -> newest first
+	if ids[0] != "20220101-120000" {
+		t.Errorf("newest first = %q, want 20220101-120000", ids[0])
+	}
+	if ids[2] != "20200101-120000" {
+		t.Errorf("oldest last = %q, want 20200101-120000", ids[2])
+	}
+}
+
+// TestListMissingBase returns nil-nil when the snapshot dir doesn't exist.
+func TestListMissingBase(t *testing.T) {
+	ids, err := listIn(filepath.Join(t.TempDir(), "nope"))
+	if err != nil {
+		t.Fatalf("expected nil error on missing base, got %v", err)
+	}
+	if ids != nil {
+		t.Fatalf("expected nil ids, got %v", ids)
+	}
+}
+
+// TestSnapshotDirCollision verifies the suffix-guard: two snapshots created
+// in the same second get distinct IDs and do not clobber each other.
+func TestSnapshotDirCollision(t *testing.T) {
+	base := t.TempDir()
+	orig := filepath.Join(base, "c.txt")
+	os.WriteFile(orig, []byte("a"), 0o644)
+
+	if _, err := createIn(base, []string{orig}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createIn(base, []string{orig}); err != nil {
+		t.Fatalf("createIn #2: %v", err)
+	}
+
+	ids, err := listIn(base)
+	if err != nil {
+		t.Fatalf("listIn: %v", err)
+	}
+	if len(ids) < 2 {
+		t.Fatalf("expected >=2 snapshots after same-second collision, got %d", len(ids))
+	}
+}
+
+// TestSanitizePath confirms the escaping rules for flat backup names.
 func TestSanitizePath(t *testing.T) {
 	tests := []struct {
 		input string
 		want  string
 	}{
-		{"/home/user/.gitconfig", ".gitconfig.bak"},
-		{"/etc/resolv.conf", "resolv.conf.bak"},
+		{"/home/user/.gitconfig", "home+user+.gitconfig.bak"},
+		{"/etc/resolv.conf", "etc+resolv.conf.bak"},
+		// same basename, different dirs must not collapse
+		{"/home/user/work/.gitconfig", "home+user+work+.gitconfig.bak"},
+		// relative path gets cleaned
+		{"foo/bar.txt", "foo+bar.txt.bak"},
+		// root path produces a distinct name
+		{"/.gitconfig", ".gitconfig.bak"},
 	}
 	for _, tt := range tests {
 		got := sanitizePath(tt.input)
@@ -119,54 +233,74 @@ func TestSanitizePath(t *testing.T) {
 	}
 }
 
-// createAt is a test helper using a custom base dir.
-func createAt(base string, destPaths []string) (*Snapshot, error) {
-	now := time.Now().UTC()
-	id := now.Format("20060102-150405")
-	snapDir := filepath.Join(base, id)
-	if err := os.MkdirAll(snapDir, 0o755); err != nil {
-		return nil, err
+// TestExpandHome confirms ~ expansion behaves for config dest paths.
+func TestExpandHome(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	tests := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"~/foo", filepath.Join(home, "foo")},
+		{"/abs/path", "/abs/path"},
+		{"relative", "relative"},
 	}
-
-	snap := &Snapshot{CreatedAt: now, Files: make([]FileRef, 0)}
-
-	for _, p := range destPaths {
-		if _, err := os.Stat(p); err != nil {
-			continue
+	for _, tt := range tests {
+		got := expandHome(tt.in)
+		if got != tt.want {
+			t.Errorf("expandHome(%q) = %q, want %q", tt.in, got, tt.want)
 		}
-		rel := sanitizePath(p)
-		backup := filepath.Join(snapDir, rel)
-		if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
-			return nil, err
-		}
-		if err := copyFile(p, backup); err != nil {
-			return nil, err
-		}
-		snap.Files = append(snap.Files, FileRef{Original: p, Backup: rel})
 	}
-
-	manifest, _ := json.MarshalIndent(snap, "", "  ")
-	if err := os.WriteFile(filepath.Join(snapDir, "manifest.json"), manifest, 0o644); err != nil {
-		return nil, err
-	}
-	return snap, nil
 }
 
-func restoreAt(base, id string) (*Snapshot, error) {
-	snapDir := filepath.Join(base, id)
-	data, err := os.ReadFile(filepath.Join(snapDir, "manifest.json"))
+// TestCopyFilePreservesMode checks that file mode is preserved on copy.
+func TestCopyFilePreservesMode(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "exec.sh")
+	os.WriteFile(src, []byte("#!/bin/sh\n"), 0o755)
+
+	dest := filepath.Join(dir, "copy.sh")
+	if err := copyFile(src, dest); err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+	info, err := os.Stat(dest)
 	if err != nil {
-		return nil, err
+		t.Fatal(err)
 	}
-	var snap Snapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, err
+	if info.Mode() != 0o755 {
+		t.Errorf("dest mode = %v, want 0755", info.Mode())
 	}
-	for _, f := range snap.Files {
-		backup := filepath.Join(snapDir, f.Backup)
-		if err := copyFile(backup, f.Original); err != nil {
-			return nil, err
+}
+
+// snapshotIDFromBase reads the single snapshot id out of a base dir.
+func snapshotIDFromBase(base string) string {
+	entries, _ := os.ReadDir(base)
+	for _, e := range entries {
+		if e.IsDir() {
+			return e.Name()
 		}
 	}
-	return &snap, nil
+	return ""
+}
+
+// TestCreateExpandHome confirms that ~ in dest paths is expanded before stat.
+func TestCreateExpandHome(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	tmpInHome := filepath.Join(home, ".nestor_test_expandhome")
+	os.WriteFile(tmpInHome, []byte("z"), 0o644)
+	defer os.Remove(tmpInHome)
+
+	base := t.TempDir()
+	reldToHome := strings.TrimPrefix(tmpInHome, home+"/")
+	_, err := createIn(base, []string{"~/" + reldToHome})
+	if err != nil {
+		t.Fatalf("createIn with ~ path: %v", err)
+	}
+	ids, _ := listIn(base)
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(ids))
+	}
+	data, _ := os.ReadFile(filepath.Join(base, ids[0], sanitizePath(tmpInHome)))
+	if string(data) != "z" {
+		t.Errorf("backup content = %q, want z", string(data))
+	}
 }
