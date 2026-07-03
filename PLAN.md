@@ -448,5 +448,14 @@ profiles:
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope)
 - Next: tag v0.1 once CI unblocked
 
+### 2026-07-03 — Daily dev session #23 — snapshot retention/pruning
 
-
+- Snapshots accumulated unboundedly: every `nestor up` created one and nothing ever retired them, so the snapshot dir grew forever
+- `internal/snapshot`: added `Prune(keep)` — keeps the N newest snapshots and removes the rest, returning the deleted IDs. `keep<=0` disables pruning (no-op guard)
+- `cmd/snapshots prune`: new subcommand `nestor snapshots prune --keep N` (default 10), listing exactly what it removed
+- `cmd/up`: auto-prunes to 10 after each snapshot create, so the snapshot dir stays bounded without users needing to think about it
+- 5 new table-driven tests (removes-oldest, keep=0 noop, under-threshold noop, exact-threshold noop, empty-base noop)
+- Snapshots parent cmd now advertises the new subcommand and `--keep` flag
+- All 178 tests pass (13/13 packages). Build clean. Vet clean. Pushed (commit 1bd93ea).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked
