@@ -304,3 +304,104 @@ func TestCreateExpandHome(t *testing.T) {
 		t.Errorf("backup content = %q, want z", string(data))
 	}
 }
+
+// makeSnapshots seeds a base dir with N deterministic timestamped snapshot
+// directories so prune tests don't depend on wall-clock timing.
+func makeSnapshots(t *testing.T, base string, ids []string) {
+	t.Helper()
+	for _, id := range ids {
+		dir := filepath.Join(base, id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeAtomic(filepath.Join(dir, "manifest.json"), []byte(`{"created_at":"2020-01-01T00:00:00Z","files":[]}`))
+	}
+}
+
+// TestPruneRemovesOldest verifies that Prune(n) keeps the n newest snapshots
+// and deletes the rest, returning exactly the deleted IDs.
+func TestPruneRemovesOldest(t *testing.T) {
+	base := t.TempDir()
+	seed := []string{"20200101-120000", "20200201-120000", "20200301-120000", "20200401-120000", "20200501-120000"}
+	makeSnapshots(t, base, seed)
+
+	removed, err := pruneIn(base, 2)
+	if err != nil {
+		t.Fatalf("pruneIn: %v", err)
+	}
+	if len(removed) != 3 {
+		t.Fatalf("expected 3 pruned, got %d (%v)", len(removed), removed)
+	}
+	// oldest three by name should be the removed set
+	want := map[string]bool{"20200101-120000": true, "20200201-120000": true, "20200301-120000": true}
+	for _, id := range removed {
+		if !want[id] {
+			t.Errorf("unexpected pruned id %q", id)
+		}
+	}
+	remaining, _ := listIn(base)
+	if len(remaining) != 2 {
+		t.Fatalf("expected 2 remaining, got %d", len(remaining))
+	}
+	if remaining[0] != "20200501-120000" || remaining[1] != "20200401-120000" {
+		t.Errorf("remaining = %v, want [20200501-120000 20200401-120000]", remaining)
+	}
+}
+
+// TestPruneKeepZeroIsNoop confirms keep<=0 disables pruning (keep-all).
+func TestPruneKeepZeroIsNoop(t *testing.T) {
+	base := t.TempDir()
+	makeSnapshots(t, base, []string{"20200101-120000", "20200201-120000"})
+
+	removed, err := pruneIn(base, 0)
+	if err != nil {
+		t.Fatalf("pruneIn(0): %v", err)
+	}
+	if removed != nil {
+		t.Errorf("expected nil removed for keep=0, got %v", removed)
+	}
+	remaining, _ := listIn(base)
+	if len(remaining) != 2 {
+		t.Errorf("keep=0 should not delete anything, remaining=%d", len(remaining))
+	}
+}
+
+// TestPruneUnderThresholdIsNoop: if count <= keep, nothing is removed.
+func TestPruneUnderThresholdIsNoop(t *testing.T) {
+	base := t.TempDir()
+	makeSnapshots(t, base, []string{"20200101-120000", "20200201-120000"})
+
+	removed, err := pruneIn(base, 5)
+	if err != nil {
+		t.Fatalf("pruneIn: %v", err)
+	}
+	if len(removed) != 0 {
+		t.Errorf("keep > count should remove nothing, got %v", removed)
+	}
+}
+
+// TestPruneExactThreshold: count == keep removes nothing.
+func TestPruneExactThreshold(t *testing.T) {
+	base := t.TempDir()
+	makeSnapshots(t, base, []string{"20200101-120000", "20200201-120000", "20200301-120000"})
+
+	removed, err := pruneIn(base, 3)
+	if err != nil {
+		t.Fatalf("pruneIn: %v", err)
+	}
+	if len(removed) != 0 {
+		t.Errorf("keep == count should remove nothing, got %v", removed)
+	}
+}
+
+// TestPruneEmptyBase: pruning a base with no snapshots is a clean no-op.
+func TestPruneEmptyBase(t *testing.T) {
+	base := t.TempDir()
+	removed, err := pruneIn(base, 10)
+	if err != nil {
+		t.Fatalf("pruneIn on empty: %v", err)
+	}
+	if removed != nil {
+		t.Errorf("expected nil removed on empty base, got %v", removed)
+	}
+}

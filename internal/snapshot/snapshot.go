@@ -199,6 +199,40 @@ func deleteIn(base, id string) error {
 	return os.RemoveAll(filepath.Join(base, id))
 }
 
+// Prune keeps the `keep` most recent snapshots and removes the rest, returning
+// the IDs of the snapshots it deleted. If keep <= 0 it defaults to keeping all
+// snapshots (no-op). It never removes a snapshot that does not appear in List,
+// so there is no risk of deleting a directory injected out-of-band.
+func Prune(keep int) ([]string, error) {
+	base, err := Dir()
+	if err != nil {
+		return nil, err
+	}
+	return pruneIn(base, keep)
+}
+
+func pruneIn(base string, keep int) ([]string, error) {
+	if keep <= 0 {
+		return nil, nil
+	}
+	ids, err := listIn(base)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) <= keep {
+		return nil, nil
+	}
+	// ids is newest-first; the oldest (len-keep) entries are pruned.
+	removed := make([]string, 0, len(ids)-keep)
+	for _, id := range ids[keep:] {
+		if err := os.RemoveAll(filepath.Join(base, id)); err != nil {
+			return removed, fmt.Errorf("delete snapshot %s: %w", id, err)
+		}
+		removed = append(removed, id)
+	}
+	return removed, nil
+}
+
 // copyFile copies src to dest, preserving file mode. It checks the close
 // error on the destination so that write failures (e.g. disk full) are not
 // silently turned into truncated backups.

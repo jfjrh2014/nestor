@@ -19,6 +19,11 @@ import (
 
 var upProfileFlag string
 
+// snapshotKeepDefault is the number of recent snapshots `nestor up` retains
+// after each run. Older snapshots are pruned automatically to stop the
+// snapshot dir growing unboundedly across many runs.
+const snapshotKeepDefault = 10
+
 var upCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Bootstrap your dev environment from nestor.yml",
@@ -132,6 +137,11 @@ func runUp(ctx context.Context) error {
 			p.Warn(fmt.Sprintf("snapshot failed (non-fatal): %v", err))
 		} else if len(snap.Files) > 0 {
 			p.OK(fmt.Sprintf("snapshot created (%d files backed up)", len(snap.Files)))
+		}
+		// Prune to a sane history regardless of snapshot outcome so the
+		// snapshot dir does not grow unboundedly across many `up` runs.
+		if removed, perr := snapshot.Prune(snapshotKeepDefault); perr == nil && len(removed) > 0 {
+			p.Info(fmt.Sprintf("pruned %d old snapshot(s)", len(removed)))
 		}
 	}
 
