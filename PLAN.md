@@ -459,3 +459,14 @@ profiles:
 - All 178 tests pass (13/13 packages). Build clean. Vet clean. Pushed (commit 1bd93ea).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
+
+### 2026-07-04 — Daily dev session #24 — sync dotfile merge bugfix
+
+- Found a data-loss bug in `nestor sync` (the "capture current machine" command)
+- When a config already existed, sync merged scanned packages into it but discarded scanned dotfile templates: `foundDots` was written to a throwaway cfg that got overwritten by the loaded existing config (`cfg = existing`), so re-running sync on a machine with an existing config silently dropped every dotfile it detected
+- Same class of bug as session #22's drift counter — a value computed but never plumbed through
+- Extracted `mergeStrings` and `mergeDotfiles` pure helpers (dedup by name and dest path respectively), wired both into the merge path; packages path refactored to use the same helper for consistency
+- 10 new table-driven tests across both helpers (append, skip-dup, empty-src, empty-dst, dedup-within-src)
+- All 188 tests pass (12/12 packages). Build clean. Vet clean. Pushed (commit ff5f3bc).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked
