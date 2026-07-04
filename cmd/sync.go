@@ -94,15 +94,8 @@ func runSync(ctx context.Context) error {
 		p.Warn(fmt.Sprintf("config already exists at %s — merging", outPath))
 		existing, loadErr := config.Load(outPath)
 		if loadErr == nil {
-			pkgSet := map[string]bool{}
-			for _, pkg := range existing.Packages.Common {
-				pkgSet[pkg] = true
-			}
-			for _, pkg := range foundPkgs {
-				if !pkgSet[pkg] {
-					existing.Packages.Common = append(existing.Packages.Common, pkg)
-				}
-			}
+			existing.Packages.Common = mergeStrings(existing.Packages.Common, foundPkgs)
+			existing.Dotfiles.Templates = mergeDotfiles(existing.Dotfiles.Templates, foundDots)
 			cfg = existing
 		}
 	}
@@ -193,4 +186,42 @@ func scanDotfiles(home string) []config.Template {
 		}
 	}
 	return templates
+}
+
+// mergeStrings appends items from src to dst that are not already present,
+// preserving original order. Returns dst if src is empty.
+func mergeStrings(dst, src []string) []string {
+	if len(src) == 0 {
+		return dst
+	}
+	seen := map[string]bool{}
+	for _, s := range dst {
+		seen[s] = true
+	}
+	for _, s := range src {
+		if !seen[s] {
+			dst = append(dst, s)
+			seen[s] = true
+		}
+	}
+	return dst
+}
+
+// mergeDotfiles appends templates from src to dst whose Dest is not already
+// present, preserving original order. Returns dst if src is empty.
+func mergeDotfiles(dst, src []config.Template) []config.Template {
+	if len(src) == 0 {
+		return dst
+	}
+	seen := map[string]bool{}
+	for _, t := range dst {
+		seen[t.Dest] = true
+	}
+	for _, t := range src {
+		if !seen[t.Dest] {
+			dst = append(dst, t)
+			seen[t.Dest] = true
+		}
+	}
+	return dst
 }

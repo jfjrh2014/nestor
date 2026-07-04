@@ -118,3 +118,112 @@ func TestCheckPkgInstalled(t *testing.T) {
 		t.Error("nonexistent package should not be installed")
 	}
 }
+
+func TestMergeStrings(t *testing.T) {
+	tests := []struct {
+		name string
+		dst  []string
+		src  []string
+		want []string
+	}{
+		{
+			name: "appends new items preserving order",
+			dst:  []string{"git", "curl"},
+			src:  []string{"vim", "jq"},
+			want: []string{"git", "curl", "vim", "jq"},
+		},
+		{
+			name: "skips duplicates",
+			dst:  []string{"git", "curl"},
+			src:  []string{"git", "vim"},
+			want: []string{"git", "curl", "vim"},
+		},
+		{
+			name: "empty src returns dst unchanged",
+			dst:  []string{"git"},
+			src:  nil,
+			want: []string{"git"},
+		},
+		{
+			name: "empty dst absorbs all of src",
+			dst:  nil,
+			src:  []string{"git", "curl"},
+			want: []string{"git", "curl"},
+		},
+		{
+			name: "dedupes within src too",
+			dst:  []string{"git"},
+			src:  []string{"curl", "curl", "curl"},
+			want: []string{"git", "curl"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeStrings(tt.dst, tt.src)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d (%v)", len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("index %d = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestMergeDotfiles(t *testing.T) {
+	dotfile := func(dest string) config.Template {
+		return config.Template{Src: dest + ".tmpl", Dest: dest}
+	}
+	tests := []struct {
+		name string
+		dst  []config.Template
+		src  []config.Template
+		want []string // dest paths, in order
+	}{
+		{
+			name: "appends new dests preserving order",
+			dst:  []config.Template{dotfile("~/.bashrc")},
+			src:  []config.Template{dotfile("~/.gitconfig"), dotfile("~/.vimrc")},
+			want: []string{"~/.bashrc", "~/.gitconfig", "~/.vimrc"},
+		},
+		{
+			name: "skips duplicate dest",
+			dst:  []config.Template{dotfile("~/.bashrc")},
+			src:  []config.Template{dotfile("~/.bashrc"), dotfile("~/.vimrc")},
+			want: []string{"~/.bashrc", "~/.vimrc"},
+		},
+		{
+			name: "empty src returns dst unchanged",
+			dst:  []config.Template{dotfile("~/.bashrc")},
+			src:  nil,
+			want: []string{"~/.bashrc"},
+		},
+		{
+			name: "empty dst absorbs all of src",
+			dst:  nil,
+			src:  []config.Template{dotfile("~/.bashrc"), dotfile("~/.gitconfig")},
+			want: []string{"~/.bashrc", "~/.gitconfig"},
+		},
+		{
+			name: "dedupes within src too",
+			dst:  []config.Template{dotfile("~/.bashrc")},
+			src:  []config.Template{dotfile("~/.vimrc"), dotfile("~/.vimrc")},
+			want: []string{"~/.bashrc", "~/.vimrc"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeDotfiles(tt.dst, tt.src)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range tt.want {
+				if got[i].Dest != tt.want[i] {
+					t.Errorf("index %d dest = %q, want %q", i, got[i].Dest, tt.want[i])
+				}
+			}
+		})
+	}
+}
