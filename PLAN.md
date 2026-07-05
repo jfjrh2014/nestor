@@ -470,3 +470,13 @@ profiles:
 - All 188 tests pass (12/12 packages). Build clean. Vet clean. Pushed (commit ff5f3bc).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
+
+### 2026-07-05 — Daily dev session #25 — secrets check dead-code + list count bug
+
+- Third instance of the same dead-value bug class (sessions #22, #24, now #25): `resolved` and `failedCount` in `runSecretsCheck` were incremented per key but never reported — only the `issues` count reached the summary, so `nestor secrets check` showed per-key lines and a diagnosis but no aggregate "N resolved, M failed" line
+- Fixed: check now prints `N resolved, M failed` (warn) or `N secret(s) resolved` (ok) after the loop
+- Adjacent counting bug in `nestor list`: secrets incremented `total` but never `ok`/`missing`, making the summary "N managed (N ok, N need attention)" silently not add up — secrets aren't status-checked in list, so they're now excluded from verified totals (still listed)
+- Strengthened `TestSecretsCheckEnvProvider` to assert the resolved-count line, added `TestSecretsCheckMixedResolve` (1 good + 1 bad key) and rewrote `TestSecretsCheckMissingKey` to assert "0 resolved, 1 failed"
+- All 191 tests pass (12/12 packages). Build clean. Vet clean. Pushed (commit e02da00).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked
