@@ -125,8 +125,9 @@ func runList(ctx context.Context) error {
 		p.Info("no secrets declared")
 	} else {
 		for _, m := range cfg.Secrets.Mappings {
-			total++
-			// We don't resolve secrets in list — just show the mapping exists
+			// We don't resolve secrets in list — just show the mapping exists.
+			// Secrets aren't status-checked, so we don't add them to total/ok/missing
+			// (the summary counts verified items only).
 			dests := make([]string, 0, len(m.Inject))
 			for d := range m.Inject {
 				dests = append(dests, d)

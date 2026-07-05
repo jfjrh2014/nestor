@@ -171,6 +171,11 @@ func runSecretsCheck(ctx context.Context, w io.Writer) error {
 				p.OK(fmt.Sprintf("%s reachable", m.Key))
 			}
 		}
+		if failedCount > 0 {
+			p.Warn(fmt.Sprintf("%d resolved, %d failed", resolved, failedCount))
+		} else {
+			p.OK(fmt.Sprintf("%d secret(s) resolved", resolved))
+		}
 	}
 
 	// Injection targets

@@ -48,6 +48,11 @@ secrets:
 	if !strings.Contains(body, "NESTOR_TEST_KEY reachable") {
 		t.Fatalf("expected key reachable, got: %s", body)
 	}
+	// Regression: the per-key loop must surface a count of resolved keys.
+	// Pre-fix, resolved/failedCount were incremented but never reported.
+	if !strings.Contains(body, "1 secret(s) resolved") {
+		t.Fatalf("expected resolved-count summary, got: %s", body)
+	}
 	if !strings.Contains(body, "all secrets reachable") {
 		t.Fatalf("expected all reachable, got: %s", body)
 	}
@@ -75,8 +80,49 @@ secrets:
 	if !strings.Contains(body, "not set") {
 		t.Fatalf("expected 'not set' error, got: %s", body)
 	}
+	// Regression: a missing key must surface in the resolve summary, not just the diagnosis.
+	if !strings.Contains(body, "0 resolved, 1 failed") {
+		t.Fatalf("expected '0 resolved, 1 failed' summary, got: %s", body)
+	}
 	if !strings.Contains(body, "issue(s) found") {
 		t.Fatalf("expected issue count, got: %s", body)
+	}
+}
+
+// TestSecretsCheckMixedResolve verifies the resolve summary line reports
+// correct counts when some keys resolve and others don't.
+func TestSecretsCheckMixedResolve(t *testing.T) {
+	t.Setenv("NESTOR_GOOD_KEY", "present")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeFile(t, cfgPath, `version: 1
+secrets:
+  provider: env
+  mappings:
+    - key: NESTOR_GOOD_KEY
+      inject:
+        ~/.nestor-a: "a={{.NESTOR_GOOD_KEY}}"
+    - key: NESTOR_BAD_KEY
+      inject:
+        ~/.nestor-b: "b={{.NESTOR_BAD_KEY}}"
+`)
+
+	out := &bytes.Buffer{}
+	code := runSecretsCheckForTest(t, cfgPath, out)
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	body := out.String()
+	// One resolved, one failed — both must appear in the new summary line.
+	if !strings.Contains(body, "1 resolved, 1 failed") {
+		t.Fatalf("expected '1 resolved, 1 failed', got: %s", body)
+	}
+	if !strings.Contains(body, "NESTOR_GOOD_KEY reachable") {
+		t.Fatalf("expected good key marked reachable, got: %s", body)
+	}
+	if !strings.Contains(body, "NESTOR_BAD_KEY") {
+		t.Fatalf("expected bad key mentioned in output, got: %s", body)
 	}
 }
 
