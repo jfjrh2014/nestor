@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/dotfiles"
 	"github.com/jfjrh2014/nestor/internal/packages"
 	"github.com/jfjrh2014/nestor/internal/platform"
 	"github.com/spf13/cobra"
@@ -151,18 +152,29 @@ func dashLoadStatus(cfg *config.Config) tea.Cmd {
 			sourceDir = filepath.Join(home, ".config", "nestor", "dotfiles")
 		}
 
+		// Reuse the canonical drift detector from internal/dotfiles instead of
+		// reimplementing it here. The previous inline check used os.Stat (which
+		// follows symlinks, so a drifted link read as "missing") and a suffix
+		// match on the link target (which matched any link ending in the file
+		// name, not just links into the configured source dir). Check() uses
+		// os.Lstat and compares the resolved source path.
+		deployer := dotfiles.Deployer{
+			Strategy: dotfiles.Strategy(cfg.Dotfiles.Strategy),
+			Source:   sourceDir,
+		}
+
 		var dotStatuses []dashDotfileStatus
 		for _, t := range cfg.Dotfiles.Templates {
-			dest := dashExpandTilde(t.Dest, home)
-			_, statErr := os.Stat(dest)
-			present := statErr == nil
-
+			present := false
 			drift := false
-			if present && cfg.Dotfiles.Strategy == "symlink" {
-				link, err := os.Readlink(dest)
-				if err != nil || !strings.HasSuffix(link, t.Src) {
-					drift = true
-				}
+			switch deployer.Check(t.Src, t.Dest) {
+			case dotfiles.CheckPresent:
+				present = true
+			case dotfiles.CheckDrifted:
+				present = true
+				drift = true
+			case dotfiles.CheckAbsent, dotfiles.CheckSrcMissing:
+				// present stays false
 			}
 
 			dotStatuses = append(dotStatuses, dashDotfileStatus{
@@ -186,13 +198,6 @@ func dashLoadStatus(cfg *config.Config) tea.Cmd {
 			secrets:        secStatuses,
 		}
 	}
-}
-
-func dashExpandTilde(path, home string) string {
-	if strings.HasPrefix(path, "~") {
-		return filepath.Join(home, path[1:])
-	}
-	return path
 }
 
 // --- bubbletea boilerplate ---

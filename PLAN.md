@@ -480,3 +480,14 @@ profiles:
 - All 191 tests pass (12/12 packages). Build clean. Vet clean. Pushed (commit e02da00).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
+
+### 2026-07-06 — Daily dev session #26 — dashboard drift detection + staticcheck
+
+- Ran staticcheck on the codebase for the first time (installed `honnef.co/go/tools/cmd/staticcheck@2023.1.5` for Go 1.19 compat). Two hits, both dead-value class.
+- **`cmd/dashboard.go`** — dashboard reimplemented dotfile drift detection inline, with four bugs: `sourceDir` computed with a default fallback but never plumbed through (the staticcheck hit); `os.Stat` follows symlinks, so a drifted symlink read as "missing" not "drifted"; `strings.HasSuffix(link, t.Src)` matched any link ending in the filename regardless of source dir; and copy-strategy drift was never checked at all. Replaced with `dotfiles.Deployer.Check`, the canonical detector already used by `nestor diff` — uses `os.Lstat` and compares resolved source paths for both strategies.
+- Removed the now-dead `dashExpandTilde` helper (its job is done by `dotfiles.expandHome` inside `Check`) and its test.
+- **`internal/secrets/secrets.go`** — `var placeholderRe` (regex) was declared but never referenced; `injectOne` already used `strings.ReplaceAll`. Removed it and the now-unused `regexp` import.
+- 4 new regression tests: copy-strategy drift detected, symlink-strategy drift detected (the drift use case os.Stat got wrong), absent still maps to present=false, and a mapping table test locking the four CheckStatus → (present, drift) contracts into one place.
+- All 194 tests pass (13/13 packages). Build clean. Vet clean. **staticcheck clean** (was 2 hits).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked

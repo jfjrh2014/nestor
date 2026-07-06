@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
@@ -156,8 +155,6 @@ func (s Status) String() string {
 	}
 	return "unknown"
 }
-
-var placeholderRe = regexp.MustCompile(`\{\{\s*\.\s*` + "Key" + `\s*\}\}`)
 
 func injectOne(key, val, dest, pattern string) InjectResult {
 	dest = expandHome(dest)
