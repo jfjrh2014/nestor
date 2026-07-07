@@ -164,26 +164,42 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("mkdir: %w", err)}
 	}
 
-	// Replace key placeholder in pattern.
-	// Pattern like: "oauth_token: {{.Key}}" → "oauth_token: secretval"
-	replaced := strings.ReplaceAll(pattern, "{{.Key}}", val)
-	replaced = strings.ReplaceAll(replaced, "{{."+key+"}}", val)
+	// Resolve the placeholder(s) to produce the new line. We support both the
+	// literal {{.Key}} form and the named {{.<key>}} form so a single pattern
+	// works regardless of how the user wrote the placeholder.
+	resolved := strings.ReplaceAll(pattern, "{{.Key}}", val)
+	resolved = strings.ReplaceAll(resolved, "{{."+key+"}}", val)
 
-	// If dest exists, try to find and replace the pattern in the existing file.
 	data, err := os.ReadFile(dest)
 	if err == nil && len(data) > 0 {
 		content := string(data)
+
+		// Case 1: the literal pattern is still in the file (first injection
+		// against a template that still carries its placeholder).
 		if strings.Contains(content, pattern) {
-			content = strings.ReplaceAll(content, pattern, replaced)
+			content = strings.ReplaceAll(content, pattern, resolved)
 			if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
 				return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("write: %w", err)}
 			}
 			return InjectResult{Key: key, Dest: dest, Status: StatusInjected}
 		}
+
+		// Case 2: the pattern's static anchor prefix is present on a line — that
+		// line is a previous injection (the placeholder was already resolved on
+		// an earlier run). Replace the whole line so re-injection is idempotent
+		// and value rotation replaces instead of appending a duplicate.
+		if anchor := patternAnchor(pattern); anchor != "" {
+			if updated, ok := replaceAnchoredLine(content, anchor, resolved); ok {
+				if err := os.WriteFile(dest, []byte(updated), 0o644); err != nil {
+					return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("write: %w", err)}
+				}
+				return InjectResult{Key: key, Dest: dest, Status: StatusInjected}
+			}
+		}
 	}
 
-	// Dest doesn't exist or pattern not found — append the line.
-	line := replaced + "\n"
+	// Case 3: dest is absent, empty, or has no matching anchor — append the line.
+	line := resolved + "\n"
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("open: %w", err)}
@@ -193,6 +209,35 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("write: %w", err)}
 	}
 	return InjectResult{Key: key, Dest: dest, Status: StatusInjected}
+}
+
+// patternAnchor returns the static prefix of pattern up to the first {{
+// placeholder. If pattern has no placeholder, patternAnchor returns the whole
+// pattern. The anchor identifies which line in an already-injected file belongs
+// to this mapping, so a second injection replaces the stale value in place
+// instead of appending a duplicate.
+func patternAnchor(pattern string) string {
+	if idx := strings.Index(pattern, "{{"); idx >= 0 {
+		return pattern[:idx]
+	}
+	return pattern
+}
+
+// replaceAnchoredLine replaces the first line in content that begins with
+// anchor with newLine. It returns the updated content and whether a matching
+// line was found. An empty anchor never matches.
+func replaceAnchoredLine(content, anchor, newLine string) (string, bool) {
+	if anchor == "" {
+		return content, false
+	}
+	lines := strings.Split(content, "\n")
+	for i, ln := range lines {
+		if strings.HasPrefix(ln, anchor) {
+			lines[i] = newLine
+			return strings.Join(lines, "\n"), true
+		}
+	}
+	return content, false
 }
 
 func expandHome(p string) string {
