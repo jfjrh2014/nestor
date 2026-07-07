@@ -491,3 +491,13 @@ profiles:
 - All 194 tests pass (13/13 packages). Build clean. Vet clean. **staticcheck clean** (was 2 hits).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
+
+### 2026-07-07 — Daily dev session #27 — secrets injection idempotency
+
+- `nestor secrets inject` was not idempotent. After the first injection the dest holds the *resolved* value (`oauth_token: ghp_first`), not the literal pattern (`oauth_token: {{.Key}}`). A second run's `strings.Contains(content, pattern)` check missed, and the code fell through to append. Re-running inject appended a duplicate line every time; rotating a secret appended the new value instead of replacing the old one.
+- Fourth instance of a value-not-surviving-the-round-trip bug (cf. sessions #22, #24, #25): here it is the resolved pattern that doesn't survive, where in the earlier sessions it was a counter.
+- Fix: added an anchor-based re-injection path in `injectOne`. When the literal pattern isn't present but the static prefix before the first `{{` placeholder matches a line, replace that line in place instead of appending. Derived `patternAnchor` and `replaceAnchoredLine` as pure helpers for testability.
+- 7 new regression tests: idempotent re-inject (same value), in-place value rotation, `{{.<key>}}` named-placeholder idempotency (the form the PLAN.md example uses), neighbouring lines preserved on replace, plus table-driven coverage of both helpers.
+- All 200 tests pass (12/12 packages with tests). Build clean. Vet clean. staticcheck clean. Pushed (commit ab1f3c9).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked
