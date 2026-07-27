@@ -127,11 +127,8 @@ func runUp(ctx context.Context) error {
 	}
 
 	// Step 3: snapshot existing dotfiles before overwriting
-	if len(cfg.Dotfiles.Templates) > 0 {
-		destPaths := make([]string, 0, len(cfg.Dotfiles.Templates))
-		for _, t := range cfg.Dotfiles.Templates {
-			destPaths = append(destPaths, t.Dest)
-		}
+	destPaths := snapshotDestPaths(cfg, profileName)
+	if len(destPaths) > 0 {
 		snap, err := snapshot.Create(destPaths)
 		if err != nil {
 			p.Warn(fmt.Sprintf("snapshot failed (non-fatal): %v", err))
@@ -244,6 +241,27 @@ func runUp(ctx context.Context) error {
 	p.OK("environment is up")
 
 	return nil
+}
+
+// snapshotDestPaths returns the destination paths that should be backed up
+// before a dotfile deploy in this run. It combines the base templates with any
+// profile-specific templates so that 'nestor rollback' can restore destinations
+// overwritten by a --profile deploy, not just the base ones. Deduplicates by
+// dest to avoid double-copying a file that appears in both lists.
+func snapshotDestPaths(cfg *config.Config, profile string) []string {
+	all := append([]config.Template{}, cfg.Dotfiles.Templates...)
+	all = append(all, cfg.ProfileDotfiles(profile)...)
+
+	seen := make(map[string]bool, len(all))
+	out := make([]string, 0, len(all))
+	for _, t := range all {
+		if seen[t.Dest] {
+			continue
+		}
+		seen[t.Dest] = true
+		out = append(out, t.Dest)
+	}
+	return out
 }
 
 // configureShell detects the current shell and sets up plugins. GitHub-type
