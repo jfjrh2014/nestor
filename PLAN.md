@@ -501,3 +501,13 @@ profiles:
 - All 200 tests pass (12/12 packages with tests). Build clean. Vet clean. staticcheck clean. Pushed (commit ab1f3c9).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
+### 2026-07-28 — Daily dev session #30 — sync dotfile materialization + merge source bug
+
+- Two bugs in `nestor sync` (the "capture current machine" command):
+- **Bug 1 (materialization):** detected dotfiles were written into config as template refs (`.bashrc.tmpl`) but never copied into the source dir. So `nestor up` after `nestor sync` pointed at templates that didn't exist and failed to deploy every scanned dotfile. Added `copyDotfileTemplates` to materialize each detected file as its `.tmpl` counterpart in the source dir.
+- **Bug 2 (dead-value, merge path):** `cfg = existing` on the merge path discarded the freshly-computed `sourceDir` when the existing config had empty `Source`. Fifth instance of the dead-value bug class (cf. #22, #24, #25, #27). Fixed: merge now preserves the freshly-computed source dir when the existing config has none.
+- Derived `copyDotfileTemplates` and `copyFileSynced` as pure helpers for testability.
+- 5 new tests: full-copy happy path, partial-failure (missing source skipped), mode preservation, merge-preserves-source, merge-doesn't-clobber-existing-source.
+- All 171 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 02cb5d9).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked
