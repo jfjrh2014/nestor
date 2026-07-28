@@ -3,9 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/platform"
@@ -81,6 +83,17 @@ func runSync(ctx context.Context) error {
 	if len(foundDots) > 0 {
 		cfg.Dotfiles.Templates = foundDots
 		p.OK(fmt.Sprintf("found %d common dotfiles", len(foundDots)))
+		// Materialize detected dotfiles as templates in the source dir, so the
+		// generated config points at files that actually exist. Without this,
+		// `nestor up` after `nestor sync` fails to deploy every detected dotfile.
+		if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+			return fmt.Errorf("sync: create source dir: %w", err)
+		}
+		copied, copyErr := copyDotfileTemplates(home, sourceDir, foundDots)
+		if copyErr != nil {
+			p.Warn(fmt.Sprintf("dotfile copy: %v", copyErr))
+		}
+		p.OK(fmt.Sprintf("copied %d template(s) into %s", copied, sourceDir))
 	} else {
 		p.Info("no common dotfiles found in home dir")
 	}
@@ -96,6 +109,11 @@ func runSync(ctx context.Context) error {
 		if loadErr == nil {
 			existing.Packages.Common = mergeStrings(existing.Packages.Common, foundPkgs)
 			existing.Dotfiles.Templates = mergeDotfiles(existing.Dotfiles.Templates, foundDots)
+			// Preserve the freshly-computed source dir if the existing config has
+			// none — otherwise the merged config points at templates with no source.
+			if existing.Dotfiles.Source == "" {
+				existing.Dotfiles.Source = sourceDir
+			}
 			cfg = existing
 		}
 	}
@@ -186,6 +204,56 @@ func scanDotfiles(home string) []config.Template {
 		}
 	}
 	return templates
+}
+
+// copyDotfileTemplates materializes detected dotfiles as template files in the
+// source dir, so the generated config points at files that actually exist. A
+// template's Src (e.g. ".bashrc.tmpl") is mapped back to the detected file
+// (".bashrc") in the home dir. Returns the number of files successfully copied.
+func copyDotfileTemplates(home, sourceDir string, templates []config.Template) (int, error) {
+	copied := 0
+	var firstErr error
+	for _, t := range templates {
+		// t.Src is like ".bashrc.tmpl" — strip the ".tmpl" suffix to recover the
+		// real file name, then resolve it under home.
+		srcFile := strings.TrimSuffix(t.Src, ".tmpl")
+		src := filepath.Join(home, srcFile)
+		dest := filepath.Join(sourceDir, t.Src)
+		if err := copyFileSynced(src, dest); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		copied++
+	}
+	return copied, firstErr
+}
+
+// copyFileSynced copies src to dest, preserving file mode.
+func copyFileSynced(src, dest string) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	info, _ := in.Stat()
+	if info != nil {
+		_ = out.Chmod(info.Mode())
+	}
+	return out.Close()
 }
 
 // mergeStrings appends items from src to dst that are not already present,
