@@ -49,6 +49,9 @@ func runAddIO(kind, name string, in io.Reader, out io.Writer) error {
 }
 
 func addPackage(name string, out io.Writer) error {
+	if name == "" {
+		return fmt.Errorf("add package: name is required")
+	}
 	path := configPath()
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -73,6 +76,9 @@ func addPackage(name string, out io.Writer) error {
 }
 
 func addDotfile(name string, out io.Writer) error {
+	if name == "" {
+		return fmt.Errorf("add dotfile: name is required")
+	}
 	path := configPath()
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -116,6 +122,9 @@ func addDotfile(name string, out io.Writer) error {
 }
 
 func addSecret(name string, in io.Reader, out io.Writer) error {
+	if name == "" {
+		return fmt.Errorf("add secret: name is required")
+	}
 	path := configPath()
 	cfg, err := config.Load(path)
 	if err != nil {

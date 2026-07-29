@@ -272,3 +272,77 @@ func TestPromptInjectTarget(t *testing.T) {
 		}
 	})
 }
+
+// TestAddPackageEmptyName guards against panics / silent corruption when a
+// caller passes an empty package name. The handler must return an error,
+// not crash or write a garbage entry to config.
+func TestAddPackageEmptyName(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	err := addPackage("", &out)
+	if err == nil {
+		t.Fatal("expected error for empty package name, got nil")
+	}
+	// Config must be unchanged after a rejected add.
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load: %v", err)
+	}
+	for _, p := range cfg.Packages.Common {
+		if p == "" {
+			t.Error("empty string leaked into common packages")
+		}
+	}
+}
+
+// TestAddDotfileEmptyName exercises the original crash: addDotfile("") used to
+// index name[0] without a length check, panicking with "index out of range".
+func TestAddDotfileEmptyName(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	err := addDotfile("", &out)
+	if err == nil {
+		t.Fatal("expected error for empty dotfile name, got nil")
+	}
+	// The key assertion: no panic. We got here, so the guard works.
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load: %v", err)
+	}
+	if len(cfg.Dotfiles.Templates) != 0 {
+		t.Errorf("expected 0 templates, got %d", len(cfg.Dotfiles.Templates))
+	}
+}
+
+// TestAddSecretEmptyName ensures an empty secret key is rejected before any
+// config is loaded or written.
+func TestAddSecretEmptyName(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	err := addSecret("", strings.NewReader("\n"), &out)
+	if err == nil {
+		t.Fatal("expected error for empty secret name, got nil")
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load: %v", err)
+	}
+	if len(cfg.Secrets.Mappings) != 0 {
+		t.Errorf("expected 0 mappings, got %d", len(cfg.Secrets.Mappings))
+	}
+}
