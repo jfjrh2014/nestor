@@ -511,3 +511,12 @@ profiles:
 - All 171 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 02cb5d9).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
+
+### 2026-07-29 — Daily dev session #31 — add empty-name panic + input validation
+
+- `nestor add dotfile ""` panicked: `addDotfile` indexed `name[0]` without a length check, crashing with "index out of range [0] with length 0". `addPackage` and `addSecret` had no guard either, and would write empty-keyed entries into the config that `validate()` would later reject on every command that loads it.
+- Fixed all three handlers to return an early error before any config load or write. Different bug class than the dead-value family (#22, #24, #25, #27, #30): a missing bounds check rather than a value-not-plumbed-through.
+- 3 new regression tests (one per handler). The dotfile test is the key one: without the guard it crashes the test binary with a panic.
+- All 174 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 4e16abf).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
+- Next: tag v0.1 once CI unblocked
