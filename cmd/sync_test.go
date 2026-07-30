@@ -146,3 +146,74 @@ func TestSyncMergeDoesNotClobberExistingSource(t *testing.T) {
 		t.Errorf("source = %q, want %q (should not be overwritten)", existing.Dotfiles.Source, existingSource)
 	}
 }
+
+// TestSyncMergeCopiesToEffectiveSource is a regression test for the dead-value
+// bug where templates were always copied into the default source dir even when
+// the existing config had a custom source. After the fix, templates must land
+// in the effective (resolved) source dir so `nestor up` can find them.
+func TestSyncMergeCopiesToEffectiveSource(t *testing.T) {
+	home := t.TempDir()
+	defaultSourceDir := filepath.Join(home, ".config", "nestor", "dotfiles")
+	customSourceDir := filepath.Join(home, "custom-dotfiles")
+
+	// Seed a dotfile in home — sync will detect it.
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("# bash\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate what runSync does: compute a default, then find an existing config
+	// with a *custom* source. The effective source for template copy must be the
+	// custom dir, not the default.
+	detected := scanDotfiles(home)
+	if len(detected) == 0 {
+		t.Fatal("expected at least one detected dotfile in home dir")
+	}
+
+	// Existing config has a custom source set.
+	cfg := &config.Config{
+		Version: 1,
+		Dotfiles: config.Dotfiles{
+			Source:    customSourceDir,
+			Strategy:  "copy",
+			Templates: []config.Template{},
+		},
+	}
+
+	// Merge: existing source wins.
+	cfg.Dotfiles.Templates = mergeDotfiles(cfg.Dotfiles.Templates, detected)
+	if cfg.Dotfiles.Source == "" {
+		cfg.Dotfiles.Source = defaultSourceDir
+	}
+
+	// Effective source computation (mirrors the fixed runSync path).
+	effectiveSource := cfg.Dotfiles.Source
+	if effectiveSource == "" {
+		effectiveSource = defaultSourceDir
+	}
+
+	if effectiveSource != customSourceDir {
+		t.Fatalf("effectiveSource = %q, want %q (custom dir)", effectiveSource, customSourceDir)
+	}
+
+	// Copy templates into effectiveSource, then verify they landed there.
+	if err := os.MkdirAll(effectiveSource, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := copyDotfileTemplates(home, effectiveSource, detected)
+	if err != nil {
+		t.Fatalf("copyDotfileTemplates: %v", err)
+	}
+	if copied == 0 {
+		t.Fatal("expected at least one template copied")
+	}
+
+	// Template should be in the custom dir, NOT the default dir.
+	customPath := filepath.Join(customSourceDir, ".bashrc.tmpl")
+	if _, err := os.Stat(customPath); err != nil {
+		t.Errorf("template not in custom source dir: %v", err)
+	}
+	defaultPath := filepath.Join(defaultSourceDir, ".bashrc.tmpl")
+	if _, err := os.Stat(defaultPath); err == nil {
+		t.Error("template was copied to default source dir — should only be in custom dir")
+	}
+}

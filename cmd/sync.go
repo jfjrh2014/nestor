@@ -76,24 +76,13 @@ func runSync(ctx context.Context) error {
 	// Scan dotfiles
 	p.Header("dotfiles")
 	home, _ := os.UserHomeDir()
-	sourceDir := filepath.Join(home, ".config", "nestor", "dotfiles")
-	cfg.Dotfiles.Source = sourceDir
+	defaultSourceDir := filepath.Join(home, ".config", "nestor", "dotfiles")
+	cfg.Dotfiles.Source = defaultSourceDir
 
 	foundDots := scanDotfiles(home)
 	if len(foundDots) > 0 {
 		cfg.Dotfiles.Templates = foundDots
 		p.OK(fmt.Sprintf("found %d common dotfiles", len(foundDots)))
-		// Materialize detected dotfiles as templates in the source dir, so the
-		// generated config points at files that actually exist. Without this,
-		// `nestor up` after `nestor sync` fails to deploy every detected dotfile.
-		if err := os.MkdirAll(sourceDir, 0o755); err != nil {
-			return fmt.Errorf("sync: create source dir: %w", err)
-		}
-		copied, copyErr := copyDotfileTemplates(home, sourceDir, foundDots)
-		if copyErr != nil {
-			p.Warn(fmt.Sprintf("dotfile copy: %v", copyErr))
-		}
-		p.OK(fmt.Sprintf("copied %d template(s) into %s", copied, sourceDir))
 	} else {
 		p.Info("no common dotfiles found in home dir")
 	}
@@ -112,10 +101,30 @@ func runSync(ctx context.Context) error {
 			// Preserve the freshly-computed source dir if the existing config has
 			// none — otherwise the merged config points at templates with no source.
 			if existing.Dotfiles.Source == "" {
-				existing.Dotfiles.Source = sourceDir
+				existing.Dotfiles.Source = defaultSourceDir
 			}
 			cfg = existing
 		}
+	}
+
+	// Materialize detected dotfiles as templates in the resolved source dir. This
+	// runs AFTER the merge so it uses the effective source (existing custom or
+	// default), not always the default — otherwise templates land in the wrong
+	// place when the existing config has a custom source, and `nestor up` fails
+	// with CheckSrcMissing for every newly-detected dotfile.
+	if len(foundDots) > 0 {
+		effectiveSource := cfg.Dotfiles.Source
+		if effectiveSource == "" {
+			effectiveSource = defaultSourceDir
+		}
+		if err := os.MkdirAll(effectiveSource, 0o755); err != nil {
+			return fmt.Errorf("sync: create source dir: %w", err)
+		}
+		copied, copyErr := copyDotfileTemplates(home, effectiveSource, foundDots)
+		if copyErr != nil {
+			p.Warn(fmt.Sprintf("dotfile copy: %v", copyErr))
+		}
+		p.OK(fmt.Sprintf("copied %d template(s) into %s", copied, effectiveSource))
 	}
 
 	data, err := config.Marshal(cfg)
