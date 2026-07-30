@@ -520,3 +520,13 @@ profiles:
 - All 174 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 4e16abf).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
+
+### 2026-07-30 — Daily dev session #32 — sync effective-source copy bug
+
+- Sixth instance of the dead-value bug class (cf. #22, #24, #25, #27, #30), this time in `nestor sync`.
+- When merging detected dotfiles into an existing config that had a *custom* dotfiles source (not the default `~/.config/nestor/dotfiles`), templates were always copied into the freshly-computed default source dir while the merged config kept pointing at the custom source. So `nestor up` after `nestor sync` failed with `CheckSrcMissing` for every newly-detected dotfile — the copy and the config disagreed on where the source was.
+- Fix: moved the `copyDotfileTemplates` call to after the merge resolves `cfg`, and compute the effective source from the resolved config (custom if set, else default). Templates now land where the config says they live.
+- 1 new regression test (`TestSyncMergeCopiesToEffectiveSource`) that seeds a custom-source config, runs the merge simulation, and asserts the template lands in the custom dir — not the default.
+- All 175 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 57e5c4c).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — re-tested the push today, same `refusing to allow an OAuth App to create or update workflow` rejection. Files ready at .github/workflows/.
+- Next: tag v0.1 once CI unblocked
