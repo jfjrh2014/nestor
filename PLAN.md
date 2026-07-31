@@ -521,6 +521,18 @@ profiles:
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/
 - Next: tag v0.1 once CI unblocked
 
+### 2026-07-31 — Daily dev session #33 — import path plumbing (dead-value class)
+
+- Seventh instance of the dead-value bug class (cf. #22, #24, #25, #27, #30, #32), this time in `cmd/import.go`.
+- `importSource` was declared as a package global, written (`importSource = name`), and even read (`_ = importSource`), but its value never reached `importer.NewChezmoi("")` or `importer.NewBrewfile("")` — both were always called with `""`, so the documented `nestor import brewfile ~/Dotfiles/Brewfile` form quietly scanned CWD instead of the named path.
+- Worse, `cobra.MaximumNArgs(1)` rejected a second positional arg before the path could even reach the global, so the feature was double-dead: the flag wiring and the arg wiring both ended at nothing.
+- Fix: removed the dead global; command now accepts 2 positional args (`[chezmoi|yadm|brewfile] [path]`); extracted `resolveImporter(name, srcPath)` as a pure plumbing function so the name+path → importer mapping is unit-testable; `srcPath` now flows into `NewChezmoi`/`NewBrewfile`. Also fixed a variable shadow on the merge path that wrote the config back to the importer's source path, not the loaded config path.
+- Added explicit guard rails: a path passed with `auto` or `yadm` is now rejected with a clear error (they have no configurable source) instead of being silently dropped — the exact failure mode this bug class exploits.
+- 5 new tests in `cmd/import_test.go` (unknown source, auto+path rejected, yadm+path rejected, brewfile honours path, chezmoi honours path). Tests prove the path reaches the constructors by asserting the not-found errors, without requiring chezmoi/yadm installed.
+- All 180 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 5af2ba5).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
+- Next: tag v0.1 once CI unblocked
+
 ### 2026-07-30 — Daily dev session #32 — sync effective-source copy bug
 
 - Sixth instance of the dead-value bug class (cf. #22, #24, #25, #27, #30), this time in `nestor sync`.
