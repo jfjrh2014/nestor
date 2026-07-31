@@ -9,33 +9,35 @@ import (
 )
 
 var importDryRun bool
-var importSource string
 
 var importCmd = &cobra.Command{
-	Use:   "import [chezmoi|yadm|brewfile]",
+	Use:   "import [chezmoi|yadm|brewfile] [path]",
 	Short: "Import from an existing dotfile manager",
 	Long: `Import packages and dotfiles from chezmoi, yadm, or a Brewfile.
 
 If no source is given, nestor auto-detects which tool you use.
+An optional path overrides the default location (chezmoi source dir,
+Brewfile path). yadm has no configurable source.
 
 Examples:
   nestor import                 # auto-detect
-  nestor import chezmoi        # from chezmoi source dir
+  nestor import chezmoi        # from default chezmoi source dir
   nestor import yadm           # from yadm list
   nestor import brewfile       # from Brewfile in CWD
   nestor import brewfile ~/Dotfiles/Brewfile
+  nestor import chezmoi ~/.config/chezmoi-alt
   nestor import --dry-run      # preview what would be imported`,
-	Args: cobra.MaximumNArgs(1),
+	Args: cobra.MaximumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_ = importSource
 		name := ""
+		srcPath := ""
 		if len(args) > 0 {
 			name = args[0]
 		}
-		if name != "" {
-			importSource = name
+		if len(args) > 1 {
+			srcPath = args[1]
 		}
-		return runImport(name)
+		return runImport(name, srcPath)
 	},
 }
 
@@ -44,26 +46,14 @@ func init() {
 	rootCmd.AddCommand(importCmd)
 }
 
-func runImport(source string) error {
-	path := configPath()
-	cfg, err := config.Load(path)
+func runImport(name, srcPath string) error {
+	nestorPath := configPath()
+	cfg, err := config.Load(nestorPath)
 	if err != nil {
 		return fmt.Errorf("import: %w", err)
 	}
 
-	var imp importer.Importer
-	switch source {
-	case "", "auto":
-		imp, err = importer.Auto()
-	case "chezmoi":
-		imp, err = importer.NewChezmoi("")
-	case "yadm":
-		imp, err = importer.NewYadm()
-	case "brewfile", "brew":
-		imp, err = importer.NewBrewfile("")
-	default:
-		return fmt.Errorf("unknown import source %q (use chezmoi, yadm, or brewfile)", source)
-	}
+	imp, err := resolveImporter(name, srcPath)
 	if err != nil {
 		return fmt.Errorf("import: %w", err)
 	}
@@ -103,10 +93,38 @@ func runImport(source string) error {
 		return nil
 	}
 
-	if err := writeConfig(path, cfg); err != nil {
+	if err := writeConfig(nestorPath, cfg); err != nil {
 		return fmt.Errorf("import: %w", err)
 	}
 
-	fmt.Printf("nestor: imported %d new items into %s\n", added, path)
+	fmt.Printf("nestor: imported %d new items into %s\n", added, nestorPath)
 	return nil
+}
+
+// resolveImporter picks the importer for a named source, applying an optional
+// path override. Extracted from runImport so the plumbing (name + path →
+// importer) can be unit-tested without invoking a real import or touching disk
+// beyond what the importer constructors already do.
+func resolveImporter(name, srcPath string) (importer.Importer, error) {
+	switch name {
+	case "", "auto":
+		// auto-detect ignores an explicit path — there is no single source to
+		// point it at without knowing which tool was detected. The user would
+		// pass an explicit source name to use a path.
+		if srcPath != "" {
+			return nil, fmt.Errorf("--path %q requires an explicit source (chezmoi or brewfile), not auto", srcPath)
+		}
+		return importer.Auto()
+	case "chezmoi":
+		return importer.NewChezmoi(srcPath)
+	case "yadm":
+		if srcPath != "" {
+			return nil, fmt.Errorf("yadm does not accept a path override (it reads `yadm list -a`)")
+		}
+		return importer.NewYadm()
+	case "brewfile", "brew":
+		return importer.NewBrewfile(srcPath)
+	default:
+		return nil, fmt.Errorf("unknown import source %q (use chezmoi, yadm, or brewfile)", name)
+	}
 }
