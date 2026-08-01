@@ -542,3 +542,13 @@ profiles:
 - All 175 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 57e5c4c).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — re-tested the push today, same `refusing to allow an OAuth App to create or update workflow` rejection. Files ready at .github/workflows/.
 - Next: tag v0.1 once CI unblocked
+
+### 2026-08-01 — Daily dev session #34 — secrets "no secrets declared" guard bug
+
+- Related to the dead-value family but a distinct shape: a redundant guard condition, not a discarded value.
+- `runSecretsInject`, `runSecretsCheck`, and `runDoctor` all used `(cfg.Secrets.Provider == "" || len(cfg.Secrets.Mappings) == 0)` as the "no secrets declared" early-return. The OR short-circuits on an empty provider — but an empty/omitted provider is *valid*: `config.validate()` allows it and `secrets.NewProvider("")` returns the env default. So a config with real mappings but no `provider:` line silently reported "no secrets declared" in all three commands, hiding the user's configured secrets. Worse, `nestor ci` treated the same state as a hard `SeverityError`, so the CLI disagreed with itself.
+- Fix: all three sites now key on `len(cfg.Secrets.Mappings) == 0` alone. `doctor` resolves the provider via `NewProvider` so it reports the real provider name (`env`) rather than printing an empty literal. The check command's provider-block was also restructured so a failed `NewProvider` is reported once and the per-key loop still produces a "0 resolved, N failed" summary instead of swallowing the failure.
+- 2 new regression tests (`TestSecretsCheckEmptyProviderWithMappings`, `TestSecretsInjectEmptyProviderWithMappings`) that seed a config with mappings and no provider, then assert the mapping key is resolved/reported (not hidden behind "no secrets declared").
+- All 182 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit b484d77).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
+- Next: tag v0.1 once CI unblocked
