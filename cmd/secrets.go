@@ -63,18 +63,21 @@ func runSecretsInject(ctx context.Context, w io.Writer) error {
 	}
 
 	p.Header("secrets")
-	if cfg.Secrets.Provider == "" || len(cfg.Secrets.Mappings) == 0 {
+	if len(cfg.Secrets.Mappings) == 0 {
 		p.Info("no secrets declared")
 		return nil
 	}
 
+	// An empty provider is valid: NewProvider("") returns the env default.
+	// Resolve the provider once so a malformed provider name is caught before
+	// we enter the per-key loop or the CLI existence check.
 	prov, err := secrets.NewProvider(cfg.Secrets.Provider)
 	if err != nil {
 		p.Error(fmt.Sprintf("provider %s: %v", cfg.Secrets.Provider, err))
 		return err
 	}
 
-	providerCLI := secretCLI(cfg.Secrets.Provider)
+	providerCLI := secretCLI(prov.Name())
 	if providerCLI != "env" {
 		if _, lookErr := exec.LookPath(providerCLI); lookErr != nil {
 			p.Error(fmt.Sprintf("provider CLI '%s' not found in PATH", providerCLI))
@@ -124,16 +127,27 @@ func runSecretsCheck(ctx context.Context, w io.Writer) error {
 	}
 
 	p.Header("secrets")
-	if cfg.Secrets.Provider == "" || len(cfg.Secrets.Mappings) == 0 {
+	if len(cfg.Secrets.Mappings) == 0 {
 		p.Info("no secrets declared")
 		return nil
 	}
 
-	// Provider
-	p.Info(fmt.Sprintf("provider: %s", cfg.Secrets.Provider))
-	providerCLI := secretCLI(cfg.Secrets.Provider)
+	// Provider. An empty provider is valid: NewProvider("") returns the env
+	// default. Resolve it once so we check the real CLI, and so the
+	// per-key loop below uses the same provider instance.
+	prov, provErr := secrets.NewProvider(cfg.Secrets.Provider)
+	resolvedName := cfg.Secrets.Provider
+	if provErr != nil {
+		p.Error(fmt.Sprintf("provider %s: %v", cfg.Secrets.Provider, provErr))
+		issues++
+	} else {
+		resolvedName = prov.Name()
+	}
+	p.Info(fmt.Sprintf("provider: %s", resolvedName))
+
+	providerCLI := secretCLI(resolvedName)
 	if providerCLI == "" {
-		p.Error(fmt.Sprintf("unknown provider: %s", cfg.Secrets.Provider))
+		p.Error(fmt.Sprintf("unknown provider: %s", resolvedName))
 		issues++
 	} else if providerCLI != "env" {
 		if _, lookErr := exec.LookPath(providerCLI); lookErr != nil {
@@ -148,10 +162,14 @@ func runSecretsCheck(ctx context.Context, w io.Writer) error {
 
 	// Resolve each key (dry run — no files written)
 	mappings := buildSecretMappings(cfg.Secrets.Mappings)
-	prov, err := secrets.NewProvider(cfg.Secrets.Provider)
-	if err != nil {
-		p.Error(fmt.Sprintf("init provider: %v", err))
-		issues++
+	if provErr != nil {
+		// Provider setup failed; surface the per-key outcome as failures so
+		// the diagnosis line still reflects every secret we could not check.
+		for _, m := range mappings {
+			p.Error(fmt.Sprintf("%s: %v", m.Key, provErr))
+		}
+		p.Warn(fmt.Sprintf("0 resolved, %d failed", len(mappings)))
+		issues += len(mappings)
 	} else {
 		resolved, failedCount := 0, 0
 		for _, m := range mappings {

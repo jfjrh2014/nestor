@@ -10,6 +10,7 @@ import (
 	"github.com/jfjrh2014/nestor/internal/dotfiles"
 	"github.com/jfjrh2014/nestor/internal/packages"
 	"github.com/jfjrh2014/nestor/internal/platform"
+	secpkg "github.com/jfjrh2014/nestor/internal/secrets"
 	"github.com/jfjrh2014/nestor/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -156,19 +157,25 @@ func runDoctor(ctx context.Context) error {
 
 	// 5. Secrets
 	p.Header("secrets")
-	if cfg.Secrets.Provider == "" || len(cfg.Secrets.Mappings) == 0 {
+	if len(cfg.Secrets.Mappings) == 0 {
 		p.Info("no secrets declared")
 	} else {
-		cli := secretCLI(cfg.Secrets.Provider)
+		// An empty provider is valid: NewProvider("") returns the env default.
+		// Resolve it so we report on the real provider, not the config literal.
+		provName := cfg.Secrets.Provider
+		if prov, provErr := secpkg.NewProvider(cfg.Secrets.Provider); provErr == nil {
+			provName = prov.Name()
+		}
+		cli := secretCLI(provName)
 		if cli == "" {
-			p.Error(fmt.Sprintf("unknown secrets provider: %s", cfg.Secrets.Provider))
+			p.Error(fmt.Sprintf("unknown secrets provider: %s", provName))
 			issues++
 		} else if _, lookErr := exec.LookPath(cli); lookErr != nil {
 			p.Error(fmt.Sprintf("secrets provider CLI '%s' not found in PATH", cli))
 			p.Info(fmt.Sprintf("install %s to enable secret injection", cli))
 			issues++
 		} else {
-			p.OK(fmt.Sprintf("provider '%s' (CLI: %s) available", cfg.Secrets.Provider, cli))
+			p.OK(fmt.Sprintf("provider '%s' (CLI: %s) available", provName, cli))
 		}
 		p.Info(fmt.Sprintf("%d secret mapping(s) configured", len(cfg.Secrets.Mappings)))
 	}

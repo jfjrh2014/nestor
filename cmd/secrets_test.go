@@ -159,6 +159,78 @@ secrets:
 	}
 }
 
+// TestSecretsCheckEmptyProviderWithMappings is the regression test for the
+// "no secrets declared" guard bug. A config with secret mappings but an
+// omitted (empty) provider is valid: config.validate() allows it,
+// secrets.NewProvider("") returns the env default, and the provider literal
+// must never be used as a proxy for "has secrets to act on". Before the fix
+// the OR guard (provider=="" || len(mappings)==0) in runSecretsCheck /
+// runSecretsInject / runDoctor short-circuited on provider=="" and silently
+// reported "no secrets declared", hiding real mappings from the user.
+func TestSecretsCheckEmptyProviderWithMappings(t *testing.T) {
+	t.Setenv("NESTOR_EMPTY_PROVID_KEY", "present")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeFile(t, cfgPath, `version: 1
+secrets:
+  mappings:
+    - key: NESTOR_EMPTY_PROVID_KEY
+      inject:
+        `+filepath.Join(dir, "target")+`: "k={{.NESTOR_EMPTY_PROVID_KEY}}"
+`)
+
+	out := &bytes.Buffer{}
+	code := runSecretsCheckForTest(t, cfgPath, out)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d (output: %s)", code, out.String())
+	}
+
+	body := out.String()
+	if strings.Contains(body, "no secrets declared") {
+		t.Fatalf("regression: empty-provider-with-mappings reported 'no secrets declared'\n%s", body)
+	}
+	if !strings.Contains(body, "NESTOR_EMPTY_PROVID_KEY reachable") {
+		t.Fatalf("expected the mapping key to be resolved and reported reachable\n%s", body)
+	}
+	if !strings.Contains(body, "provider: env") {
+		t.Fatalf("expected provider to be reported as the resolved env default\n%s", body)
+	}
+}
+
+// TestSecretsInjectEmptyProviderWithMappings mirrors the regression on the
+// inject path: an empty provider must still produce a real injection.
+func TestSecretsInjectEmptyProviderWithMappings(t *testing.T) {
+	t.Setenv("NESTOR_EMPTY_PROVID_INJ", "injected-val")
+	dir := t.TempDir()
+	destFile := filepath.Join(dir, "out.conf")
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeFile(t, cfgPath, `version: 1
+secrets:
+  mappings:
+    - key: NESTOR_EMPTY_PROVID_INJ
+      inject:
+        `+destFile+`: "v={{.NESTOR_EMPTY_PROVID_INJ}}"
+`)
+
+	out := &bytes.Buffer{}
+	code := runSecretsInjectForTest(t, cfgPath, out)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d (output: %s)", code, out.String())
+	}
+
+	if strings.Contains(out.String(), "no secrets declared") {
+		t.Fatalf("regression: inject reported 'no secrets declared' for a config with mappings\n%s", out.String())
+	}
+
+	data, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Fatalf("dest file not created: %v", err)
+	}
+	if !strings.Contains(string(data), "v=injected-val") {
+		t.Fatalf("expected injected value in file, got: %s", string(data))
+	}
+}
+
 // runSecretsCheckForTest runs the check logic with output written directly to
 // the provided buffer. Returns 0 on success, 1 on error.
 func runSecretsCheckForTest(t *testing.T, cfgPath string, out *bytes.Buffer) int {
