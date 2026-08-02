@@ -193,7 +193,7 @@ func runUp(ctx context.Context) error {
 	// Step 5: inject secrets (base + profile layer)
 	p.Header("secrets")
 	profileSecrets := cfg.ProfileSecretMappings(profileName)
-	if (len(cfg.Secrets.Mappings) == 0 && len(profileSecrets) == 0) || cfg.Secrets.Provider == "" {
+	if !hasSecrets(cfg.Secrets.Mappings, profileSecrets) {
 		p.Info("no secrets declared")
 	} else {
 		prov, err := secrets.NewProvider(cfg.Secrets.Provider)
@@ -241,6 +241,16 @@ func runUp(ctx context.Context) error {
 	p.OK("environment is up")
 
 	return nil
+}
+
+// hasSecrets reports whether there are any secret mappings to act on,
+// combining the base config mappings with profile-layered ones. Provider
+// literal is intentionally NOT consulted: an empty/omitted provider is valid
+// (it resolves to the env default), so only the mapping count gates the work.
+// See session #34 for the prior (... || provider == "") guard bug, and
+// session #35 for this same guard surviving in `up` after #34 missed it.
+func hasSecrets(base []config.Mapping, profile []config.Mapping) bool {
+	return len(base) > 0 || len(profile) > 0
 }
 
 // snapshotDestPaths returns the destination paths that should be backed up

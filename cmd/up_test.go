@@ -6,6 +6,62 @@ import (
 	"github.com/jfjrh2014/nestor/internal/config"
 )
 
+func TestHasSecrets(t *testing.T) {
+	tests := []struct {
+		name    string
+		base    []config.Mapping
+		profile []config.Mapping
+		want    bool
+	}{
+		{
+			name: "empty base and profile",
+			want: false,
+		},
+		{
+			name: "base only",
+			base: []config.Mapping{{Key: "K"}},
+			want: true,
+		},
+		{
+			name:    "profile only",
+			profile: []config.Mapping{{Key: "K"}},
+			want:    true,
+		},
+		{
+			name:    "both present",
+			base:    []config.Mapping{{Key: "A"}},
+			profile: []config.Mapping{{Key: "B"}},
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasSecrets(tt.base, tt.profile); got != tt.want {
+				t.Fatalf("hasSecrets(%v, %v) = %v, want %v", tt.base, tt.profile, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHasSecretsEmptyProviderRegression is the regression test for the
+// "no secrets declared" guard surviving in `nestor up` after session #34 fixed
+// it in secrets inject/check and doctor. A config with mappings but no provider
+// line must still report "has secrets" — the provider literal must never be
+// used as a proxy for "has work to do", because NewProvider("") returns the env
+// default.
+func TestHasSecretsEmptyProviderRegression(t *testing.T) {
+	// A config with mappings and an empty provider string. The helper does not
+	// receive the provider at all — by design, since the provider literal is
+	// not part of the "are there secrets?" decision.
+	cfgMappings := []config.Mapping{{Key: "TOKEN"}}
+
+	if !hasSecrets(cfgMappings, nil) {
+		t.Fatal("regression: empty-provider config with mappings must still report hasSecrets=true")
+	}
+}
+
+
 func TestSnapshotDestPaths(t *testing.T) {
 	tests := []struct {
 		name    string
