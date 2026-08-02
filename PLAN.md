@@ -552,3 +552,12 @@ profiles:
 - All 182 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit b484d77).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
 - Next: tag v0.1 once CI unblocked
+
+### 2026-08-02 — Daily dev session #35 — `up` secrets guard (session #34 follow-up)
+
+- Direct follow-up to session #34: the empty-provider guard fix was applied to `runSecretsInject`, `runSecretsCheck`, and `runDoctor`, but the same guard survived in `cmd/up.go` Step 5. `nestor up` still used `(len(ms) == 0 && len(pms) == 0) || provider == ""`. So a config with real secret mappings and no `provider:` line ran `secrets inject` fine standalone but got its secrets silently skipped by `nestor up` itself.
+- Fix: extracted `hasSecrets(base, profile)` pure helper (keys on mapping count alone, never the provider literal) and guard the step with it. Mirrors the `len(mappings) == 0` fix from #34 but in the orchestrator command.
+- 2 new tests: table-driven `TestHasSecrets` (empty/base-only/profile-only/both) and `TestHasSecretsEmptyProviderRegression` (mappings present, provider empty).
+- All 184 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit e26d022).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
+- Next: tag v0.1 once CI unblocked
