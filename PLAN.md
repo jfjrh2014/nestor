@@ -561,3 +561,12 @@ profiles:
 - All 184 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit e26d022).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
 - Next: tag v0.1 once CI unblocked
+
+### 2026-08-03 — Daily dev session #36 — `list` empty-provider guard (session #35 follow-up)
+
+- Third location of the same buggy guard from sessions #34/#35: `cmd/list.go` guarded the secrets section with `secTotal == 0 || cfg.Secrets.Provider == ""`. An empty provider is valid (defaults to env), so `nestor list` showed "no secrets declared" for a config with real mappings that other commands handled correctly.
+- Fix: drop the `||` clause, key on mapping count alone — identical shape to the fixes applied to `runSecretsInject`, `runSecretsCheck`, `runDoctor`, and `cmd/up.go` in sessions #34–#35. This was the last surviving copy of the guard.
+- Refactored `runList` into writer-injected `runListOut` (same pattern as sessions #18/#21) so the bug is unit-testable without os pipe races. Added `cmd/list_test.go` with 2 tests: empty-provider-with-mappings regression and no-secrets-declared non-regression.
+- All 186 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 0b8438b).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
+- Next: tag v0.1 once CI unblocked
