@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -30,7 +31,11 @@ func init() {
 }
 
 func runList(ctx context.Context) error {
-	p := ui.New(os.Stdout)
+	return runListOut(ctx, os.Stdout)
+}
+
+func runListOut(_ context.Context, w io.Writer) error {
+	p := ui.New(w)
 
 	path := configPath()
 	cfg, err := config.Load(path)
@@ -121,7 +126,7 @@ func runList(ctx context.Context) error {
 	// --- secrets ---
 	p.Header("secrets")
 	secTotal := len(cfg.Secrets.Mappings)
-	if secTotal == 0 || cfg.Secrets.Provider == "" {
+	if secTotal == 0 {
 		p.Info("no secrets declared")
 	} else {
 		for _, m := range cfg.Secrets.Mappings {
