@@ -570,3 +570,13 @@ profiles:
 - All 186 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 0b8438b).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
 - Next: tag v0.1 once CI unblocked
+
+### 2026-08-04 — Daily dev session #37 — dashboard provider display (final copy)
+
+- Last display-side instance of the empty-provider guard bug family (cf. #34, #35, #36).
+- `dashSecretsProvider` in `cmd/dashboard.go` returned `"none"` when `cfg.Secrets.Provider == ""`, but an empty provider is valid and resolves to `env` via `NewProvider("")`. So the dashboard Overview showed "Secrets: N configured (none)" for configs that other commands handled correctly — the CLI disagreed with itself one final time.
+- Fix: key on mapping count, not the provider literal. Returns `"none"` only when there are zero mappings (genuinely no secrets), `"env"` when mappings exist but provider is unset, and the literal provider name otherwise.
+- Updated `TestDashSecretsProvider` from 2 to 4 cases: added empty-provider-with-mappings (the regression) and set-provider-without-mappings (ensures "none" is still shown when there's truly nothing configured).
+- All 188 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 137fa5f).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
+- Next: tag v0.1 once CI unblocked
