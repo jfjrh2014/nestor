@@ -15,8 +15,10 @@ func TestDashSecretsProvider(t *testing.T) {
 		cfg  *config.Config
 		want string
 	}{
-		{"empty", &config.Config{Secrets: config.Secrets{}}, "none"},
-		{"set", &config.Config{Secrets: config.Secrets{Provider: "bitwarden"}}, "bitwarden"},
+		{"empty provider, no mappings", &config.Config{Secrets: config.Secrets{}}, "none"},
+		{"empty provider, has mappings", &config.Config{Secrets: config.Secrets{Mappings: []config.Mapping{{Key: "x"}}}}, "env"},
+		{"set provider, has mappings", &config.Config{Secrets: config.Secrets{Provider: "bitwarden", Mappings: []config.Mapping{{Key: "x"}}}}, "bitwarden"},
+		{"set provider, no mappings", &config.Config{Secrets: config.Secrets{Provider: "bitwarden"}}, "none"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

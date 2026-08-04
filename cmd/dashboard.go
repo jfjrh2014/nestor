@@ -372,9 +372,15 @@ func (m dashboardModel) renderOverview() string {
 	return b.String()
 }
 
+// dashSecretsProvider returns the provider name for display. An empty provider
+// is valid and defaults to env (sessions #34-#36 fixed this guard in other
+// commands; this was the last display-side copy).
 func dashSecretsProvider(cfg *config.Config) string {
-	if cfg.Secrets.Provider == "" {
+	if len(cfg.Secrets.Mappings) == 0 {
 		return "none"
+	}
+	if cfg.Secrets.Provider == "" {
+		return "env"
 	}
 	return cfg.Secrets.Provider
 }
