@@ -580,3 +580,13 @@ profiles:
 - All 188 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 137fa5f).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
 - Next: tag v0.1 once CI unblocked
+
+### 2026-08-05 — Daily dev session #38 — remote error propagation
+
+- Different shape but same family as the dead-value bug class (sessions #22–#37): values computed but discarded, this time *errors* rather than data.
+- `nestor remote` and all three subcommands (add, show, remove) used `Run` with `_ =`, and every `runRemote*Out` function printed errors to stderr and returned nil. So a CI script calling `nestor remote add` on a failure path exited 0 — the failure was undetectable via exit code. `push` and `pull` already returned errors properly via `RunE`; `remote` was the lone holdout.
+- Fix: converted all three subcommands and the bare `remote` command to `RunE`; rewrote the three `runRemote*Out` functions to return real errors (wrapped with context) instead of swallowing them. No behavior change on success paths — only failures now surface.
+- 3 new tests: `TestRemoteAddErrorPropagates` (forces a broken config dir, asserts non-nil error), `TestRemoteShowEmptyStillTrivial` and `TestRemoteRemoveNoOpStillTrivial` (lock in that "nothing to report" is still nil, not a new failure).
+- All 189 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 6adcae2).
+- ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
+- Next: tag v0.1 once CI unblocked
