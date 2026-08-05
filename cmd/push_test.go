@@ -166,6 +166,64 @@ func remoteURLForTest(t *testing.T, dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// brokenHome returns a HOME value under which ~/.config/nestor cannot be
+// created — the parent is a regular file, so MkdirAll fails. Used to force
+// an error out of the remote subcommands to prove error propagation.
+func brokenHome(t *testing.T) {
+	t.Helper()
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", filepath.Join(blocker, "home"))
+}
+
+// TestRemoteAddErrorPropagates proves the RunE fix from session #38:
+// runRemoteAddOut must return its errors, not swallow them. Before the fix
+// every error path printed to stderr and returned nil, so a CI script calling
+// `nestor remote add` exited 0 on total failure.
+func TestRemoteAddErrorPropagates(t *testing.T) {
+	skipIfNoGit(t)
+	brokenHome(t)
+
+	err := runRemoteAddOut("https://github.com/example/dotfiles.git", os.Stdout)
+	if err == nil {
+		t.Fatal("expected error from runRemoteAddOut with a broken config dir, got nil")
+	}
+}
+
+// TestRemoteShowEmptyStillTrivial confirms the show path still returns nil
+// (not an error) when there is genuinely nothing to report — i.e. the error-
+// propagation fix didn't make "no remote configured" into a failure.
+func TestRemoteShowEmptyStillTrivial(t *testing.T) {
+	skipIfNoGit(t)
+	isolatedConfigHome(t)
+
+	cfgDir := filepath.Join(os.Getenv("HOME"), ".config", "nestor")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRemoteShowOut(os.Stdout); err != nil {
+		t.Fatalf("runRemoteShowOut on empty repo should be nil, got: %v", err)
+	}
+}
+
+// TestRemoteRemoveNoOpStillTrivial confirms the remove path still returns nil
+// when there is nothing to remove — i.e. the error-propagation fix didn't
+// turn "nothing to remove" into a failure.
+func TestRemoteRemoveNoOpStillTrivial(t *testing.T) {
+	skipIfNoGit(t)
+	isolatedConfigHome(t)
+
+	cfgDir := filepath.Join(os.Getenv("HOME"), ".config", "nestor")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRemoteRemoveOut(os.Stdout); err != nil {
+		t.Fatalf("runRemoteRemoveOut on empty repo should be nil, got: %v", err)
+	}
+}
+
 // chdirScope changes to dir for the duration of the test.
 func chdirScope(t *testing.T, dir string) {
 	t.Helper()

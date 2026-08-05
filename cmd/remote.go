@@ -21,11 +21,9 @@ Subcommands:
   nestor remote add <url>     Set the origin remote URL
   nestor remote show          Print the configured remote URL
   nestor remote remove        Remove the origin remote`,
-	Run: func(cmd *cobra.Command, args []string) {
-		// bare 'nestor remote' with no subcommand → show
-		if len(args) == 0 {
-			_ = runRemoteShow()
-		}
+	// bare 'nestor remote' with no subcommand → show
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRemoteShow()
 	},
 }
 
@@ -40,8 +38,8 @@ var remoteAddCmd = &cobra.Command{
 	Use:   "add <url>",
 	Short: "Set the git remote URL for config sync",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		_ = runRemoteAdd(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRemoteAdd(args[0])
 	},
 }
 
@@ -49,8 +47,8 @@ var remoteShowCmd = &cobra.Command{
 	Use:   "show",
 	Short: "Print the configured remote URL",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		_ = runRemoteShow()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRemoteShow()
 	},
 }
 
@@ -58,8 +56,8 @@ var remoteRemoveCmd = &cobra.Command{
 	Use:   "remove",
 	Short: "Remove the configured git remote",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		_ = runRemoteRemove()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRemoteRemove()
 	},
 }
 
@@ -70,21 +68,17 @@ func runRemoteAdd(url string) error {
 func runRemoteAddOut(url string, w io.Writer) error {
 	p := ui.New(w)
 	if !vcs.HasGit() {
-		fmt.Fprintln(os.Stderr, "error: git not found on PATH")
-		return nil
+		return fmt.Errorf("git not found on PATH")
 	}
 	dir, err := nestorConfigDir()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return nil
+		return fmt.Errorf("finding config dir: %w", err)
 	}
 	if err := vcs.Init(dir); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return nil
+		return fmt.Errorf("init repo: %w", err)
 	}
 	if err := vcs.SetRemote(dir, remoteName, url); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return nil
+		return fmt.Errorf("setting remote: %w", err)
 	}
 	p.OK(fmt.Sprintf("remote 'origin' set to %s", url))
 	return nil
@@ -98,8 +92,7 @@ func runRemoteShowOut(w io.Writer) error {
 	p := ui.New(w)
 	dir, err := nestorConfigDir()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return nil
+		return fmt.Errorf("finding config dir: %w", err)
 	}
 	url := vcs.GetRemote(dir, remoteName)
 	if url == "" {
@@ -118,8 +111,7 @@ func runRemoteRemoveOut(w io.Writer) error {
 	p := ui.New(w)
 	dir, err := nestorConfigDir()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return nil
+		return fmt.Errorf("finding config dir: %w", err)
 	}
 	url := vcs.GetRemote(dir, remoteName)
 	if url == "" {
@@ -128,8 +120,7 @@ func runRemoteRemoveOut(w io.Writer) error {
 	}
 	out, err := exec.Command("git", "-C", dir, "remote", "remove", remoteName).CombinedOutput()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err, strings.TrimSpace(string(out)))
-		return nil
+		return fmt.Errorf("removing remote: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	p.OK(fmt.Sprintf("removed remote 'origin' (was %s)", url))
 	return nil
