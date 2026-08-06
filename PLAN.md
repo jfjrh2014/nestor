@@ -590,3 +590,11 @@ profiles:
 - All 189 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 6adcae2).
 - ⚠️ CI workflows still blocked (token lacks `workflow` scope) — files ready at .github/workflows/.
 - Next: tag v0.1 once CI unblocked
+
+### 2026-08-06 — Daily dev session #39 — restore writer-injection refactor
+
+- Final command in the testability-gap series (cf. #18 push, #21 pull/remote, #36 list): `nestor restore` was the last holdout writing directly to stdout via `fmt.Print*` inside its `RunE` closure, with all logic inlined. Untestable without a binary harness.
+- Extracted `runRestoreOut(fromURL, w io.Writer) error` following the same pattern; the `RunE` closure is now a two-liner that reads the flag and delegates.
+- Added 4 tests (first tests for `cmd/restore.go`): empty-URL guard, dry-run writes no file, write path creates file, overwrite refused without `--force`. Together they exercise fetch → validate → preview → write/dry-run through a local `httptest.Server`.
+- All 193 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 2b74ba2).
+- Next: tag v0.1 once CI workflow-scope token situation is unblocked.
