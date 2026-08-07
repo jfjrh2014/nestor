@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -31,7 +32,11 @@ func init() {
 }
 
 func runDoctor(ctx context.Context) error {
-	p := ui.New(os.Stdout)
+	return runDoctorOut(ctx, os.Stdout)
+}
+
+func runDoctorOut(ctx context.Context, w io.Writer) error {
+	p := ui.New(w)
 	issues := 0
 
 	// 1. Config
