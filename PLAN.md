@@ -598,3 +598,11 @@ profiles:
 - Added 4 tests (first tests for `cmd/restore.go`): empty-URL guard, dry-run writes no file, write path creates file, overwrite refused without `--force`. Together they exercise fetch → validate → preview → write/dry-run through a local `httptest.Server`.
 - All 193 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 2b74ba2).
 - Next: tag v0.1 once CI workflow-scope token situation is unblocked.
+
+### 2026-08-07 — Daily dev session #40 — doctor writer-injection refactor
+
+- `nestor doctor` (health check) was a notable testability gap: all logic inlined in the `RunE` closure, writing directly to `os.Stdout`, with 5 discovery branches (config, platform, packages, dotfiles, secrets) exercising real system state. Untestable without the os-pipe race pattern that session #18 moved away from.
+- Extracted `runDoctorOut(ctx, w io.Writer) error` following the established pattern (#18 push, #21 pull/remote, #36 list, #39 restore). The `RunE` closure is a one-liner delegating to `runDoctor`.
+- Added 4 tests covering the key branches: missing config (returns clear error), empty-config baseline (all "no X declared" lines, exits clean), missing dotfiles source dir (flagged as issue, not a hard failure), and missing package detection (declared-but-uninstalled package is reported).
+- All 197 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit c914a7a).
+- Next: tag v0.1 once CI workflow-scope token situation is unblocked.
