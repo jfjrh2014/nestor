@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,10 +12,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var editCmd = &cobra.Command{
-	Use:   "edit <template-src>",
-	Short: "Edit a dotfile template and preview the rendered output",
-	Long: `Open a dotfile template in $EDITOR, then show a preview of the rendered output.
+func init() {
+	editCmd := &cobra.Command{
+		Use:   "edit <template-src>",
+		Short: "Edit a dotfile template and preview the rendered output",
+		Long: `Open a dotfile template in $EDITOR, then show a preview of the rendered output.
 
 If the file doesn't exist yet, a new empty template is created in the configured
 dotfiles source directory.
@@ -22,17 +24,15 @@ dotfiles source directory.
 Examples:
   nestor edit gitconfig.tmpl
   nestor edit tmux.conf.tmpl`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runEdit(args[0])
-	},
-}
-
-func init() {
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runEdit(args[0], cmd.OutOrStdout())
+		},
+	}
 	rootCmd.AddCommand(editCmd)
 }
 
-func runEdit(name string) error {
+func runEdit(name string, w io.Writer) error {
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		return fmt.Errorf("edit: %w", err)
@@ -64,21 +64,21 @@ func runEdit(name string) error {
 	}
 
 	if isNew {
-		fmt.Printf("nestor: created %s\n", srcPath)
-		fmt.Println("       add it to dotfiles.templates in nestor.yml to deploy it")
+		fmt.Fprintf(w, "nestor: created %s\n", srcPath)
+		fmt.Fprintln(w, "       add it to dotfiles.templates in nestor.yml to deploy it")
 	}
 
 	// Preview rendered output (only for .tmpl files).
 	if filepath.Ext(srcPath) == ".tmpl" {
-		fmt.Println("\n--- preview (rendered) ---")
+		fmt.Fprintln(w, "\n--- preview (rendered) ---")
 		data, err := dotfiles.Render(srcPath)
 		if err != nil {
-			fmt.Printf("nestor: render error: %v\n", err)
-			fmt.Println("(template saved, but has syntax errors — fix and re-run)")
+			fmt.Fprintf(w, "nestor: render error: %v\n", err)
+			fmt.Fprintln(w, "(template saved, but has syntax errors — fix and re-run)")
 			return nil
 		}
-		fmt.Println(string(data))
-		fmt.Println("--- end preview ---")
+		fmt.Fprintln(w, string(data))
+		fmt.Fprintln(w, "--- end preview ---")
 	}
 
 	return nil
