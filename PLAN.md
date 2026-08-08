@@ -606,3 +606,11 @@ profiles:
 - Added 4 tests covering the key branches: missing config (returns clear error), empty-config baseline (all "no X declared" lines, exits clean), missing dotfiles source dir (flagged as issue, not a hard failure), and missing package detection (declared-but-uninstalled package is reported).
 - All 197 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit c914a7a).
 - Next: tag v0.1 once CI workflow-scope token situation is unblocked.
+
+### 2026-08-08 — Daily dev session #41 — edit writer-injection refactor
+
+- `nestor edit` was the last remaining command with all output going to raw stdout via `fmt.Print*` in a `RunE` closure — preview rendered output, render-error messages, and "created new template" notices were all untestable without the os-pipe race pattern.
+- Extracted `runEdit(name string, w io.Writer) error` following the established pattern (#18 push, #21 pull/remote, #36 list, #39 restore, #40 doctor). `RunE` is now a one-liner.
+- Added 4 new tests (3 prior tests retained): preview rendered output asserted via buffer, render error reported in output (broken template syntax), non-template file skips preview (buffer assertion), new-template created message includes deploy hint.
+- All 200 tests pass (12/12 packages with tests). Build clean. Vet clean. staticcheck clean. Pushed (commit b248fdc).
+- Next: tag v0.1 once CI workflow-scope token situation is unblocked.
