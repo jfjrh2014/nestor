@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/importer"
@@ -37,7 +39,7 @@ Examples:
 		if len(args) > 1 {
 			srcPath = args[1]
 		}
-		return runImport(name, srcPath)
+		return runImport(name, srcPath, os.Stdout)
 	},
 }
 
@@ -46,7 +48,7 @@ func init() {
 	rootCmd.AddCommand(importCmd)
 }
 
-func runImport(name, srcPath string) error {
+func runImport(name, srcPath string, w io.Writer) error {
 	nestorPath := configPath()
 	cfg, err := config.Load(nestorPath)
 	if err != nil {
@@ -64,32 +66,32 @@ func runImport(name, srcPath string) error {
 	}
 
 	// Show what we found
-	fmt.Printf("nestor: source = %s (%s)\n", imp.Name(), res.Source)
+	fmt.Fprintf(w, "nestor: source = %s (%s)\n", imp.Name(), res.Source)
 	if len(res.Packages) > 0 {
-		fmt.Printf("  packages found: %d\n", len(res.Packages))
+		fmt.Fprintf(w, "  packages found: %d\n", len(res.Packages))
 		for _, p := range res.Packages {
-			fmt.Printf("    + %s\n", p)
+			fmt.Fprintf(w, "    + %s\n", p)
 		}
 	}
 	if len(res.Dotfiles) > 0 {
-		fmt.Printf("  dotfiles found: %d\n", len(res.Dotfiles))
+		fmt.Fprintf(w, "  dotfiles found: %d\n", len(res.Dotfiles))
 		for _, d := range res.Dotfiles {
-			fmt.Printf("    + %s\n", d.Dest)
+			fmt.Fprintf(w, "    + %s\n", d.Dest)
 		}
 	}
 	if res.Skipped > 0 {
-		fmt.Printf("  skipped: %d (unsupported entries)\n", res.Skipped)
+		fmt.Fprintf(w, "  skipped: %d (unsupported entries)\n", res.Skipped)
 	}
 
 	if importDryRun {
-		fmt.Println("  (dry-run, nothing written)")
+		fmt.Fprintln(w, "  (dry-run, nothing written)")
 		return nil
 	}
 
 	// Merge into config and write
 	added := importer.MergeResult(cfg, res)
 	if added == 0 {
-		fmt.Println("nestor: nothing new to add (all items already in config)")
+		fmt.Fprintln(w, "nestor: nothing new to add (all items already in config)")
 		return nil
 	}
 
@@ -97,7 +99,7 @@ func runImport(name, srcPath string) error {
 		return fmt.Errorf("import: %w", err)
 	}
 
-	fmt.Printf("nestor: imported %d new items into %s\n", added, nestorPath)
+	fmt.Fprintf(w, "nestor: imported %d new items into %s\n", added, nestorPath)
 	return nil
 }
 
