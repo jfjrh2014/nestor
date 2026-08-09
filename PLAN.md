@@ -614,3 +614,11 @@ profiles:
 - Added 4 new tests (3 prior tests retained): preview rendered output asserted via buffer, render error reported in output (broken template syntax), non-template file skips preview (buffer assertion), new-template created message includes deploy hint.
 - All 200 tests pass (12/12 packages with tests). Build clean. Vet clean. staticcheck clean. Pushed (commit b248fdc).
 - Next: tag v0.1 once CI workflow-scope token situation is unblocked.
+
+### 2026-08-09 — Daily dev session #42 — import writer-injection refactor
+
+- `nestor import` was the penultimate command writing directly to stdout via `fmt.Print*` — 9 calls across the preview (packages found, dotfiles found, skipped count), dry-run, nothing-new, and imported paths. All untestable without the os-pipe race pattern.
+- Extracted `runImport(name, srcPath string, w io.Writer) error` following the established pattern (#18 push, #21 pull/remote, #36 list, #39 restore, #40 doctor, #41 edit). `RunE` now passes `os.Stdout` explicitly.
+- Added 4 new tests (5 prior `resolveImporter` tests retained): dry-run preview output (asserts packages, skipped count, dry-run marker, and that config is untouched), nothing-new-on-second-import (idempotent re-run shows "nothing new to add"), import-and-write (asserts count in output + packages persisted to config file), missing-config-error (load failure surfaces as wrapped error, no output).
+- All 204 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 1487031).
+- Next: tag v0.1 once CI workflow-scope token situation is unblocked.
