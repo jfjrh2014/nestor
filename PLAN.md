@@ -622,3 +622,12 @@ profiles:
 - Added 4 new tests (5 prior `resolveImporter` tests retained): dry-run preview output (asserts packages, skipped count, dry-run marker, and that config is untouched), nothing-new-on-second-import (idempotent re-run shows "nothing new to add"), import-and-write (asserts count in output + packages persisted to config file), missing-config-error (load failure surfaces as wrapped error, no output).
 - All 204 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 1487031).
 - Next: tag v0.1 once CI workflow-scope token situation is unblocked.
+
+### 2026-08-10 — Daily dev session #43 — init writer-injection refactor (series complete)
+
+- `nestor init` was the last remaining command with output going to raw stdout via `fmt.Print*` in a `RunE` closure — the entire testability-gap series is now complete.
+- Extracted `runInit(w io.Writer) error` following the established pattern (#18 push, #21 pull/remote, #36 list, #39 restore, #40 doctor, #41 edit, #42 import). `RunE` is now a one-liner. The starter config content was also lifted to a named const `starterConfig` for clarity.
+- Added 2 new tests (first tests for `cmd/init.go`): creates-file-with-deploy-hint (asserts file content + stdout message), refuses-overwrite (pre-places nestor.yml, asserts error + preserved content + no stdout output).
+- All 206 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit f02c736).
+- **Writer-injection refactor series complete** — every command in the CLI now has its core logic in a testable `runXOut(io.Writer)` function, none dependent on os-pipe races.
+- Next: tag v0.1 once CI workflow-scope token situation is unblocked.
