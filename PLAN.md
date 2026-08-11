@@ -631,3 +631,11 @@ profiles:
 - All 206 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit f02c736).
 - **Writer-injection refactor series complete** — every command in the CLI now has its core logic in a testable `runXOut(io.Writer)` function, none dependent on os-pipe races.
 - Next: tag v0.1 once CI workflow-scope token situation is unblocked.
+
+### 2026-08-11 — Daily dev session #44 — rollback writer-injection refactor + first test file
+
+- `nestor rollback` (and `snapshots` / `snapshots prune`) had no dedicated test file and still inlined all logic in `RunE` closures via `ui.New(os.Stdout)` directly — the same testability gap addressed for other commands in sessions #18–#43.
+- Extracted `runRollback(id string, w io.Writer) error`, `runSnapshotsList(w io.Writer) error`, and `runSnapshotsPrune(keep int, w io.Writer) error` following the established pattern. Each `RunE` closure is now a one-liner delegating to its `runXOut` counterpart.
+- Added `cmd/rollback_test.go` (first test file for the snapshot commands). 7 new tests: rollback-latest restores file content, rollback empty errors, rollback specific snapshot via ID, snapshots list empty, snapshots list populated, prune no-op, prune removes old.
+- All 213 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 2d2df04).
+- Next: tag v0.1 once CI workflow-scope token situation is unblocked.
