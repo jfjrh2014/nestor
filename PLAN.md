@@ -639,3 +639,14 @@ profiles:
 - Added `cmd/rollback_test.go` (first test file for the snapshot commands). 7 new tests: rollback-latest restores file content, rollback empty errors, rollback specific snapshot via ID, snapshots list empty, snapshots list populated, prune no-op, prune removes old.
 - All 213 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 2d2df04).
 - Next: tag v0.1 once CI workflow-scope token situation is unblocked.
+
+### 2026-08-12 — Daily dev session #45 — profiles + ci writer-injection, pull tests
+
+- Last three `cmd/` files without dedicated test files: `profiles.go`, `ci.go`, and `pull.go` (pull already had writer-injection but no tests).
+- Extracted `runProfiles(w io.Writer)` from `profiles.go` and `runCI(w io.Writer)` from `ci.go`, following the established pattern.
+- Added `cmd/profiles_test.go` (4 tests): empty config, multi-profile listing (sorted, with detail lines), missing config error, counts in summary.
+- Added `cmd/ci_test.go` (5 tests): valid config, invalid config (mappings without provider — passes Load, fails ci.Validate), quiet suppresses success output, quiet still outputs on failure, missing config error.
+- Added `cmd/pull_test.go` (1 test): pull without a configured remote fails with a clear error.
+- All 281 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 7787980).
+- **Every command in the CLI now has a dedicated test file.**
+- Next: tag v0.1 once CI workflow-scope token situation is unblocked.
