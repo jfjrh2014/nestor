@@ -7,6 +7,25 @@ import (
 	"strings"
 )
 
+// cmdRunner abstracts running an external command so the backends are
+// testable without shelling out to real package managers. The production
+// implementation is execRunner, powered by exec.Command; tests use a mock
+// that records the commands it was asked to run.
+type cmdRunner interface {
+	Run(name string, args ...string) error
+}
+
+// execRunner runs commands via the real os/exec package.
+type execRunner struct{}
+
+func (execRunner) Run(name string, args ...string) error {
+	return exec.Command(name, args...).Run()
+}
+
+// runner is the package-level command runner used by all backends. It
+// defaults to execRunner; tests swap it via setRunner / restoreRunner.
+var runner cmdRunner = execRunner{}
+
 // Spec describes a single package to install.
 type Spec struct {
 	Raw     string // original spec text from config
@@ -149,7 +168,7 @@ func (brewMgr) IsInstalled(s Spec) (bool, error) {
 	if s.Sub == "cask" {
 		flag = "--cask"
 	}
-	err := exec.Command("brew", "list", flag, s.Name).Run()
+	err := runner.Run("brew", "list", flag, s.Name)
 	return err == nil, nil
 }
 
@@ -159,49 +178,49 @@ func (brewMgr) Install(s Spec) error {
 		args = append(args, "--"+s.Sub)
 	}
 	args = append(args, s.Name)
-	return exec.Command("brew", args...).Run()
+	return runner.Run("brew", args...)
 }
 
 type aptMgr struct{}
 
 func (aptMgr) IsInstalled(s Spec) (bool, error) {
-	err := exec.Command("dpkg", "-s", s.Name).Run()
+	err := runner.Run("dpkg", "-s", s.Name)
 	return err == nil, nil
 }
 
 func (aptMgr) Install(s Spec) error {
-	return exec.Command("apt-get", "install", "-y", s.Name).Run()
+	return runner.Run("apt-get", "install", "-y", s.Name)
 }
 
 type dnfMgr struct{}
 
 func (dnfMgr) IsInstalled(s Spec) (bool, error) {
-	err := exec.Command("rpm", "-q", s.Name).Run()
+	err := runner.Run("rpm", "-q", s.Name)
 	return err == nil, nil
 }
 
 func (dnfMgr) Install(s Spec) error {
-	return exec.Command("dnf", "install", "-y", s.Name).Run()
+	return runner.Run("dnf", "install", "-y", s.Name)
 }
 
 type pacmanMgr struct{}
 
 func (pacmanMgr) IsInstalled(s Spec) (bool, error) {
-	err := exec.Command("pacman", "-Q", s.Name).Run()
+	err := runner.Run("pacman", "-Q", s.Name)
 	return err == nil, nil
 }
 
 func (pacmanMgr) Install(s Spec) error {
-	return exec.Command("pacman", "-S", "--noconfirm", s.Name).Run()
+	return runner.Run("pacman", "-S", "--noconfirm", s.Name)
 }
 
 type snapMgr struct{}
 
 func (snapMgr) IsInstalled(s Spec) (bool, error) {
-	err := exec.Command("snap", "list", s.Name).Run()
+	err := runner.Run("snap", "list", s.Name)
 	return err == nil, nil
 }
 
 func (snapMgr) Install(s Spec) error {
-	return exec.Command("snap", "install", s.Name).Run()
+	return runner.Run("snap", "install", s.Name)
 }
