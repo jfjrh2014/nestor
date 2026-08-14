@@ -181,3 +181,314 @@ func TestCheckTemplateDrifted(t *testing.T) {
 		t.Fatalf("expected Drifted, got %s", status)
 	}
 }
+
+func TestRenderExportsRenderedTemplate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NESTOR_RENDER_TEST", "rendered-value")
+	src := filepath.Join(dir, "editor.tmpl")
+	if err := os.WriteFile(src, []byte(`ED={{env "NESTOR_RENDER_TEST"}}`), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	got, err := Render(src)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if string(got) != "ED=rendered-value" {
+		t.Fatalf("rendered output = %q, want %q", got, "ED=rendered-value")
+	}
+}
+
+func TestRenderParseError(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "broken.tmpl")
+	if err := os.WriteFile(src, []byte(`{{ if }}`), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	if _, err := Render(src); err == nil {
+		t.Fatal("expected parse error, got nil")
+	}
+}
+
+func TestSymlinkFallbackCopyOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "plain.conf")
+	if err := os.WriteFile(src, []byte("plain content\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	// Symlinking onto a non-empty directory path fails, forcing the
+	// fallbackCopy branch.
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.MkdirAll(filepath.Join(blocked, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategySymlink, Source: dir}
+	r := d.Deploy(Template{Src: "plain.conf", Dest: blocked})
+
+	if r.Status != StatusError {
+		t.Fatalf("expected Error when symlink and fallback both fail, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %v", r.Err)
+	}
+}
+
+func TestFallbackCopySuccess(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src-file")
+	if err := os.WriteFile(src, []byte("fallback payload"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "dest-file")
+
+	if err := fallbackCopy(src, dest); err != nil {
+		t.Fatalf("fallbackCopy: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if string(got) != "fallback payload" {
+		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestFallbackCopyMissingSrc(t *testing.T) {
+	dir := t.TempDir()
+	if err := fallbackCopy(filepath.Join(dir, "nope"), filepath.Join(dir, "out")); err == nil {
+		t.Fatal("expected error for missing src, got nil")
+	}
+}
+
+func TestFallbackCopyDestIsDirFails(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src-file")
+	if err := os.WriteFile(src, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	// os.Create on a directory path fails regardless of user privileges.
+	destDir := filepath.Join(dir, "dest-dir")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := fallbackCopy(src, destDir); err == nil {
+		t.Fatal("expected create error when dest is a directory, got nil")
+	}
+}
+
+func TestStatusString(t *testing.T) {
+	cases := map[Status]string{
+		StatusDeployed: "deployed",
+		StatusSkipped:  "skipped",
+		StatusError:    "error",
+		Status(99):     "unknown",
+	}
+	for status, want := range cases {
+		if got := status.String(); got != want {
+			t.Errorf("Status(%d).String() = %q, want %q", int(status), got, want)
+		}
+	}
+}
+
+func TestCheckStatusString(t *testing.T) {
+	cases := map[CheckStatus]string{
+		CheckPresent:    "present",
+		CheckDrifted:    "drifted",
+		CheckAbsent:     "absent",
+		CheckSrcMissing: "src-missing",
+		CheckStatus(99): "unknown",
+	}
+	for status, want := range cases {
+		if got := status.String(); got != want {
+			t.Errorf("CheckStatus(%d).String() = %q, want %q", int(status), got, want)
+		}
+	}
+}
+
+func TestSamePath(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.conf")
+
+	if !samePath(a, a) {
+		t.Error("identical paths should be same")
+	}
+	rel := "a.conf"
+	if !samePath(a, rel) {
+		t.Skipf("relative comparison skipped (cwd differs): %q vs %q", a, rel)
+	}
+	if samePath(filepath.Join(dir, "a.conf"), filepath.Join(dir, "b.conf")) {
+		t.Error("different paths should not be same")
+	}
+}
+
+func TestSamePathEmptyStrings(t *testing.T) {
+	if !samePath("", "") {
+		t.Error("two empty paths should compare equal via fallback")
+	}
+}
+
+func TestCheckSymlinkPresent(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "linked.conf")
+	if err := os.WriteFile(src, []byte("symlinked\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "out", ".linked.conf")
+
+	d := Deployer{Strategy: StrategySymlink, Source: dir}
+	if r := d.Deploy(Template{Src: "linked.conf", Dest: dest}); r.Status != StatusDeployed {
+		t.Fatalf("deploy: %s (%v)", r.Status, r.Err)
+	}
+
+	if status := d.Check("linked.conf", dest); status != CheckPresent {
+		t.Fatalf("expected Present, got %s", status)
+	}
+}
+
+func TestCheckSymlinkDriftedToWrongTarget(t *testing.T) {
+	dir := t.TempDir()
+	srcA := filepath.Join(dir, "a.conf")
+	srcB := filepath.Join(dir, "b.conf")
+	os.WriteFile(srcA, []byte("a\n"), 0o600)
+	os.WriteFile(srcB, []byte("b\n"), 0o600)
+
+	dest := filepath.Join(dir, "out", ".conf")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink(srcB, dest); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategySymlink, Source: dir}
+	if status := d.Check("a.conf", dest); status != CheckDrifted {
+		t.Fatalf("expected Drifted for wrong-target symlink, got %s", status)
+	}
+}
+
+func TestCheckTemplateSrcUnreadableReportsDrifted(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "bad.tmpl")
+	if err := os.WriteFile(src, []byte("{{ if }}"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	// Dest must exist so Check gets past the Lstat-absent branch and into
+	// the render-compare, where the broken template forces CheckDrifted.
+	dest := filepath.Join(dir, "out", "bad")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(dest, []byte("stale content"), 0o600); err != nil {
+		t.Fatalf("write dest: %v", err)
+	}
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	if status := d.Check("bad.tmpl", dest); status != CheckDrifted {
+		t.Fatalf("expected Drifted on unrenderable template src, got %s", status)
+	}
+}
+
+func TestDeployCreatesNestedDestDirs(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "nested.conf")
+	if err := os.WriteFile(src, []byte("deep\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "a", "b", "c", ".nested")
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "nested.conf", Dest: dest})
+	if r.Status != StatusDeployed {
+		t.Fatalf("expected Deployed, got %s (%v)", r.Status, r.Err)
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("dest not created: %v", err)
+	}
+}
+
+func TestDeployAbsoluteSrcOverridesSource(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	// File lives in dirB; Deployer.Source points at dirA. An absolute Src
+	// must win over Source.
+	file := filepath.Join(dirB, "abs.conf")
+	if err := os.WriteFile(file, []byte("from-b\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dirA}
+	r := d.Deploy(Template{Src: file, Dest: filepath.Join(dirA, "out", ".abs")})
+	if r.Status != StatusDeployed {
+		t.Fatalf("expected Deployed, got %s (%v)", r.Status, r.Err)
+	}
+	got, err := os.ReadFile(filepath.Join(dirA, "out", ".abs"))
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if string(got) != "from-b\n" {
+		t.Fatalf("content = %q, want %q", got, "from-b\n")
+	}
+}
+
+func TestDeployUnrenderableTemplateReturnsReadError(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "broken.tmpl")
+	if err := os.WriteFile(src, []byte("{{ if }}"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "broken.tmpl", Dest: filepath.Join(dir, "out", ".broken")})
+	if r.Status != StatusError {
+		t.Fatalf("expected Error, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "read") {
+		t.Fatalf("expected read-prefixed error, got %v", r.Err)
+	}
+}
+
+func TestDeployDestIsDirReturnsWriteError(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "w.conf")
+	if err := os.WriteFile(src, []byte("w\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	// Writing onto a directory path fails with EISDIR regardless of user.
+	destDir := filepath.Join(dir, "dest-is-dir")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "w.conf", Dest: destDir})
+	if r.Status != StatusError {
+		t.Fatalf("expected Error, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "write") {
+		t.Fatalf("expected write-prefixed error, got %v", r.Err)
+	}
+}
+
+func TestCopyMkdirFailure(t *testing.T) {
+	// A dest whose ancestor is a file (not a dir) makes MkdirAll fail.
+	dir := t.TempDir()
+	src := filepath.Join(dir, "m.conf")
+	if err := os.WriteFile(src, []byte("m\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a dir"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "m.conf", Dest: filepath.Join(blocker, "nested", ".m")})
+	if r.Status != StatusError {
+		t.Fatalf("expected Error, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "mkdir") {
+		t.Fatalf("expected mkdir-prefixed error, got %v", r.Err)
+	}
+}
