@@ -650,3 +650,18 @@ profiles:
 - All 281 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 7787980).
 - **Every command in the CLI now has a dedicated test file.**
 - Next: tag v0.1 once CI workflow-scope token situation is unblocked.
+
+### 2026-08-13 — Daily dev session #46 — packages backend testability
+
+- `internal/packages` had 40.8% coverage: all five backend command invocations (brew, apt, dnf, pacman, snap) called `exec.Command` directly, untestable without hitting real system tools.
+- Extracted `cmdRunner` interface + `execRunner` wrapper; backends now take an injected runner at construction.
+- 18 new tests in `backends_test.go`: per-backend IsInstalled + Install command construction, brew formula/cask flag selection, InstallAll all-paths/empty/reuse.
+- Coverage: 40.8% -> 96.1% of statements in internal/packages. Pushed (commit 68a800a).
+
+### 2026-08-14 — Daily dev session #47 — dotfiles coverage push
+
+- `internal/dotfiles` was the lowest-covered core package at 52.6%.
+- 18 new tests: exported `Render` (happy path + parse error), `fallbackCopy` (success, missing src, dest-is-dir), symlink `Check` branches (present, drifted-to-wrong-target), unrenderable-template `Check` -> Drifted, `Status`/`CheckStatus` String tables incl. unknown, `samePath`, nested dest dir creation, absolute Src overriding Deployer.Source, and mkdir/read/write error paths.
+- Error-path tests use EISDIR/file-blocker techniques instead of chmod 0500 — they fail correctly whether run as root or a normal user.
+- Coverage: 52.6% -> 91.8% of statements. All 259 tests pass. Build clean. Vet clean. staticcheck clean. Pushed (commit 40bda1d).
+- Grand total coverage now: ci 88.5%, config 93.9%, dotfiles 91.8%, packages 96.1%, restore 87.1%, shell 74.4%, vcs 70.3%, snapshot 64.2%, platform 63.0%, importer 62.1%, secrets 61.9%, cmd 47.0%.
