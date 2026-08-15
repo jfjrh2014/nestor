@@ -16,6 +16,27 @@ type Provider interface {
 	Name() string
 }
 
+// cmdOutput abstracts running an external command and capturing its stdout so
+// the CLI-backed providers are testable without shelling out to real secret
+// managers. The production implementation is execCommand, powered by
+// exec.Command; tests swap in a mock that records the commands it was asked
+// to run and returns canned stdout.
+type cmdOutput interface {
+	Output(name string, args ...string) ([]byte, error)
+}
+
+// execCommand runs commands via the real os/exec package.
+type execCommand struct{}
+
+func (execCommand) Output(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
+// cmdOut is the package-level command runner used by the CLI-backed
+// providers. It defaults to execCommand; tests swap it via swapCmdOut
+// and restore on cleanup.
+var cmdOut cmdOutput = execCommand{}
+
 // EnvProvider reads secrets from environment variables.
 type EnvProvider struct{}
 
@@ -35,7 +56,7 @@ type OnePasswordProvider struct{}
 func (OnePasswordProvider) Name() string { return "1password" }
 
 func (OnePasswordProvider) Resolve(key string) (string, error) {
-	out, err := exec.Command("op", "read", key).Output()
+	out, err := cmdOut.Output("op", "read", key)
 	if err != nil {
 		return "", fmt.Errorf("op read %s: %w", key, err)
 	}
@@ -48,7 +69,7 @@ type BitwardenProvider struct{}
 func (BitwardenProvider) Name() string { return "bitwarden" }
 
 func (BitwardenProvider) Resolve(key string) (string, error) {
-	out, err := exec.Command("bw", "get", "password", key).Output()
+	out, err := cmdOut.Output("bw", "get", "password", key)
 	if err != nil {
 		return "", fmt.Errorf("bw get password %s: %w", key, err)
 	}
@@ -69,7 +90,7 @@ func (VaultProvider) Resolve(key string) (string, error) {
 		path = parts[0]
 		field = parts[1]
 	}
-	out, err := exec.Command("vault", "read", "-field="+field, path).Output()
+	out, err := cmdOut.Output("vault", "read", "-field="+field, path)
 	if err != nil {
 		return "", fmt.Errorf("vault read %s: %w", key, err)
 	}
