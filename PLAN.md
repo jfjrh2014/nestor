@@ -665,3 +665,12 @@ profiles:
 - Error-path tests use EISDIR/file-blocker techniques instead of chmod 0500 — they fail correctly whether run as root or a normal user.
 - Coverage: 52.6% -> 91.8% of statements. All 259 tests pass. Build clean. Vet clean. staticcheck clean. Pushed (commit 40bda1d).
 - Grand total coverage now: ci 88.5%, config 93.9%, dotfiles 91.8%, packages 96.1%, restore 87.1%, shell 74.4%, vcs 70.3%, snapshot 64.2%, platform 63.0%, importer 62.1%, secrets 61.9%, cmd 47.0%.
+
+### 2026-08-15 — Daily dev session #48 — secrets provider testability
+
+- `internal/secrets` at 61.9%: the three CLI-backed providers (1password via `op`, bitwarden via `bw`, vault via `vault`) called `exec.Command` directly — 0% coverage, untestable without real secret managers.
+- Extracted `cmdOutput` interface + `execCommand` wrapper: same seam as session #46's `cmdRunner` in packages, adapted to capture command *stdout* (providers need output, backends only needed exit status). Providers construct through the package-level `cmdOut`, tests swap it via `swapCmdOut`.
+- 17 new tests: per-provider resolve + failure with exact command-arg assertions (`op read <ref>`, `bw get password <name>`, `vault read -field=<f> <path>`), vault key parsing (`secret/path#field` vs default `value` field), multi-mapping `ResolveAll`, `~` expansion in inject dests, missing-resolved-value error result, mkdir/open error branches (file-blocker and EISDIR, per #47 pattern), Status.String table, expandHome table.
+- Coverage: 61.9% → 94.9%. All 271 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 37ef587).
+- Coverage standings now: packages 96.1%, secrets 94.9%, config 93.9%, dotfiles 91.8%, ci 88.5%, restore 87.1%, shell 74.4%, vcs 70.3%, snapshot 64.2%, platform 63.0%, importer 62.1%, cmd 47.0%.
+- Next: coverage push on importer (62.1%) or platform (63.0%), or a cmd-layer push (47.0%).
