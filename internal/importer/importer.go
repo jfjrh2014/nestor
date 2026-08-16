@@ -60,7 +60,7 @@ func NewBrewfile(path string) (*Brewfile, error) {
 	}
 	if path == "" {
 		// try $HOME/.Brewfile as last resort
-		if home, err := os.UserHomeDir(); err == nil {
+		if home, err := osUserHomeDir(); err == nil {
 			candidate := filepath.Join(home, ".Brewfile")
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
@@ -125,7 +125,7 @@ type Chezmoi struct {
 
 func NewChezmoi(sourceDir string) (*Chezmoi, error) {
 	if sourceDir == "" {
-		home, err := os.UserHomeDir()
+		home, err := osUserHomeDir()
 		if err != nil {
 			return nil, err
 		}
@@ -244,7 +244,7 @@ func (y *Yadm) Import() (*Result, error) {
 	}
 
 	res := &Result{Source: "yadm"}
-	home, _ := os.UserHomeDir()
+	home, _ := osUserHomeDir()
 
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)

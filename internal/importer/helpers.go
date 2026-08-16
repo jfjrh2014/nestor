@@ -13,7 +13,9 @@ var execLookPath = exec.LookPath
 var osUserHomeDir = os.UserHomeDir
 
 // runCommand runs a shell command and returns its stdout as a string.
-func runCommand(name string, args ...string) (string, error) {
+// It is a var so tests can stub command execution (same seam as the
+// cmdRunner in packages and cmdOutput in secrets).
+var runCommand = func(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).Output()
 	return string(out), err
 }

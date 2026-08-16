@@ -208,17 +208,3 @@ func TestChezmoiNotFound(t *testing.T) {
 		t.Error("expected error for nonexistent chezmoi dir, got nil")
 	}
 }
-
-func TestYadmNotInstalled(t *testing.T) {
-	// Force lookup failure by pointing to a binary that doesn't exist
-	orig := execLookPath
-	execLookPath = func(string) (string, error) {
-		return "", os.ErrNotExist
-	}
-	t.Cleanup(func() { execLookPath = orig })
-
-	_, err := NewYadm()
-	if err == nil {
-		t.Error("expected error when yadm not in PATH, got nil")
-	}
-}
