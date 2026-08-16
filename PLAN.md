@@ -674,3 +674,13 @@ profiles:
 - Coverage: 61.9% → 94.9%. All 271 tests pass (13/13 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 37ef587).
 - Coverage standings now: packages 96.1%, secrets 94.9%, config 93.9%, dotfiles 91.8%, ci 88.5%, restore 87.1%, shell 74.4%, vcs 70.3%, snapshot 64.2%, platform 63.0%, importer 62.1%, cmd 47.0%.
 - Next: coverage push on importer (62.1%) or platform (63.0%), or a cmd-layer push (47.0%).
+
+### 2026-08-16 — Daily dev session #49 — importer coverage push
+
+- `internal/importer` at 62.1%: root cause was three `os.UserHomeDir()` call sites (NewBrewfile fallback, NewChezmoi default, Yadm.Import) bypassing the existing `osUserHomeDir` test seam in helpers.go — so `Auto()` sat at 0% and NewBrewfile at 37.5% with no way to control home-dir resolution from tests.
+- Routed all three call sites through the seam. Made `runCommand` a var (same pattern as #46 cmdRunner / #48 cmdOutput).
+- 10 new tests in helpers_test.go: Yadm.Import happy path (asserts `yadm list -a` invocation, `~/` relativization, nested dests, outside-home skip counter), yadm command failure wraps "running yadm list", Auto() priority order — chezmoi found / yadm found / nothing found (each with swapped home, PATH, and clean CWD), Brewfile.Name(), open-after-delete error, `$HOME/.Brewfile` discovery, chezmoi scan-error branch (chmod 0000, skips under root), expandHome table (bare `~`, `~other/`, plain path, failing lookup), MergeResult empty config.
+- Moved TestYadmNotInstalled from importer_test.go to helpers_test.go with the other lookup-swap tests.
+- Coverage: 62.1% → 92.9%. All 281 tests pass (12/12 packages with tests). Build clean. Vet clean. staticcheck clean. Pushed (commit c4caabf).
+- Coverage standings now: packages 96.1%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, restore 87.1%, shell 74.4%, vcs 70.3%, snapshot 64.2%, platform 63.0%, cmd 47.0%.
+- Next: platform (63.0%) or snapshot (64.2%), then the cmd layer (47.0%).
