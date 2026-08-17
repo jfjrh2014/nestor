@@ -684,3 +684,12 @@ profiles:
 - Coverage: 62.1% → 92.9%. All 281 tests pass (12/12 packages with tests). Build clean. Vet clean. staticcheck clean. Pushed (commit c4caabf).
 - Coverage standings now: packages 96.1%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, restore 87.1%, shell 74.4%, vcs 70.3%, snapshot 64.2%, platform 63.0%, cmd 47.0%.
 - Next: platform (63.0%) or snapshot (64.2%), then the cmd layer (47.0%).
+
+### 2026-08-17 — Daily dev session #50 — platform coverage push
+
+- `internal/platform` at 63.0%: `detectOS`/`isWSL`/`detectPackageManager` read `runtime.GOOS`, `/proc/version`, and `exec.LookPath` directly — darwin, WSL, and all error branches unreachable on the CI host.
+- Routed all three environment lookups through package vars (`goos`, `lookPath`, `readProcVer`), same seam pattern as #46 (cmdRunner), #48 (cmdOutput), #49 (osUserHomeDir). Also replaced the `exec.Command("cat", "/proc/version")` subprocess with `os.ReadFile` — one fewer fork for every Detect call.
+- Rewrote `platform_test.go` around a `swapEnv(t, goos, pathMap, procVer, procErr)` helper. 11 new tests: detectOS table (darwin/linux/wsl/plan9-fallback), isWSL (microsoft string, case-insensitive, plain linux, read-error), detectPackageManager (mac brew, mac no-brew with brew.sh hint, apt/dnf/pacman/snap preference order, no linux manager, unsupported OS), commandExists via swapped PATH, Detect partial-info-on-error.
+- Coverage: 63.0% → 96.4% of statements (all five functions at 100%). All 292 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 60ee117).
+- Coverage standings: packages 96.1%, platform 96.4%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, restore 87.1%, shell 74.4%, vcs 70.3%, snapshot 64.2%, cmd 47.0%.
+- Next: snapshot (64.2%), then the cmd layer (47.0%).
