@@ -3,9 +3,17 @@ package platform
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+)
+
+// Environment lookups, swappable in tests (same seam pattern as #46 cmdRunner, #48 cmdOutput).
+var (
+	goos        = runtime.GOOS
+	lookPath    = exec.LookPath
+	readProcVer = func() ([]byte, error) { return os.ReadFile("/proc/version") }
 )
 
 // OS values
@@ -17,18 +25,18 @@ const (
 
 // Package manager values
 const (
-	PMBrew   = "brew"
-	PMAPT    = "apt"
-	PMDNF    = "dnf"
-	PMPacman = "pacman"
-	PMSnap   = "snap"
+	PMBrew    = "brew"
+	PMAPT     = "apt"
+	PMDNF     = "dnf"
+	PMPacman  = "pacman"
+	PMSnap    = "snap"
 	PMUnknown = "unknown"
 )
 
 // Info describes the host platform.
 type Info struct {
-	OS            string
-	Arch          string
+	OS             string
+	Arch           string
 	PackageManager string
 }
 
@@ -50,7 +58,7 @@ func Detect() (Info, error) {
 
 // detectOS returns one ofOSMacOS, OSLinux, OSWSL.
 func detectOS() string {
-	switch runtime.GOOS {
+	switch goos {
 	case "darwin":
 		return OSMacOS
 	case "linux":
@@ -66,7 +74,7 @@ func detectOS() string {
 
 // isWSL checks for the microsoft kernel string in /proc/version.
 func isWSL() bool {
-	out, err := exec.Command("cat", "/proc/version").Output()
+	out, err := readProcVer()
 	if err != nil {
 		return false
 	}
@@ -96,6 +104,6 @@ func detectPackageManager(os string) (string, error) {
 
 // commandExists returns true if the given command is on PATH.
 func commandExists(name string) bool {
-	_, err := exec.LookPath(name)
+	_, err := lookPath(name)
 	return err == nil
 }
