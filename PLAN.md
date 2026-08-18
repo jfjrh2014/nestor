@@ -704,4 +704,4 @@ profiles:
 - Coverage standings: packages 96.1%, platform 96.4%, secrets 94.9%, snapshot 88.5%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, restore 87.1%, shell 74.4%, vcs 70.3%, cmd 47.0%.
 - Next: the cmd layer (47.0%) is the last low-coverage package.
 
-- Pushed commit 657a803 (test + PLAssN journal append landed together; entry above).
+- Pushed commit 657a803 (snapshot tests + PLAN.md journal entry shipped as one commit).
