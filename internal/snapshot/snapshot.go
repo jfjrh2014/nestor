@@ -24,9 +24,13 @@ type FileRef struct {
 	Backup   string `json:"backup"`   // path inside the snapshot dir
 }
 
+// userHomeDir is a seam over os.UserHomeDir so tests can redirect the
+// snapshot root without touching the real home directory.
+var userHomeDir = os.UserHomeDir
+
 // Dir returns the snapshot storage root (~/.config/nestor/snapshots).
 func Dir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return "", err
 	}
@@ -313,7 +317,7 @@ func expandHome(p string) string {
 	if p == "" || p[0] != '~' {
 		return p
 	}
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return p
 	}

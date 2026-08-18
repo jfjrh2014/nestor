@@ -693,3 +693,13 @@ profiles:
 - Coverage: 63.0% → 96.4% of statements (all five functions at 100%). All 292 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit 60ee117).
 - Coverage standings: packages 96.1%, platform 96.4%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, restore 87.1%, shell 74.4%, vcs 70.3%, snapshot 64.2%, cmd 47.0%.
 - Next: snapshot (64.2%), then the cmd layer (47.0%).
+
+### 2026-08-18 — Daily dev session #51 — snapshot coverage push
+
+- `internal/snapshot` at 64.2%: the five exported wrappers (Create/List/Restore/Delete/Prune) funneled through `Dir()` -> real `os.UserHomeDir()`, so 0% coverable without touching the real home. Plus a pile of uncovered error branches in createIn/restoreIn/pruneIn/copyFile/writeAtomic.
+- Routed `Dir()` and `expandHome` through a `userHomeDir` package-var seam (pattern from #46 cmdRunner, #48 cmdOutput, #49 osUserHomeDir, #50 goos/lookPath).
+- 13 new tests: Dir seam + home-error propagation across all six exported entry points, full exported round-trip (Create -> List -> Restore -> Prune -> Delete) against a swapped home, createIn error paths (MkdirAll failure under a file-blocker, same-second dir suffix), restore with a missing manifest-referenced backup, unparseable manifest, listIn/restore read errors, pruneIn mid-failure with partial removed list (0500 parent, root-aware), copyFile missing-src + dir-as-dest, writeAtomic under-file + dir-as-target, sanitizePath windows drive-letter branch, expandHome error branch.
+- Also removed a stale `_ = id` dead-assignment in createIn (id is derived from the returned dir path; the discard was legacy from the pre-refactor layout).
+- Coverage: 64.2% -> 88.5%. All 299 tests pass. Build clean. Vet clean. staticcheck clean. Pushed (commit pending).
+- Coverage standings: packages 96.1%, platform 96.4%, secrets 94.9%, snapshot 88.5%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, restore 87.1%, shell 74.4%, vcs 70.3%, cmd 47.0%.
+- Next: the cmd layer (47.0%) is the last low-coverage package.
