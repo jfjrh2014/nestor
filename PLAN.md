@@ -705,3 +705,13 @@ profiles:
 - Next: the cmd layer (47.0%) is the last low-coverage package.
 
 - Pushed commit 657a803 (snapshot tests + PLAN.md journal entry shipped as one commit).
+
+### 2026-08-19 — Daily dev session #52 — cmd layer: dashboard TUI coverage
+
+- `cmd` at 47.0%: the bubbletea dashboard model (View/Update/Init/listLen + all four render functions) sat at 0% — assumed untestable without a terminal, but the model is a plain value type: construct it loaded, feed it `tea.KeyMsg`/`tea.WindowSizeMsg`/`dashStatusLoadedMsg`/`dashErrMsg` directly.
+- 14 new tests in `cmd/dashboard_test.go` (+324 lines): full key-handling matrix (tab cycle, shift+tab wrap to Secrets, 1-4 jumps, up/down with cursor clamping per active tab's listLen, quit keys return tea.Quit), window-size storage, dashStatusLoadedMsg population, dashErrMsg -> error View, listLen per tab, renderTabs pointer marking, all four tab renderers incl. empty states and missing/drifted annotations, overview counters (1/2 installed, 1 ok/drifted/missing, profiles line suppressed when empty), Init returns load command, dashLoadStatus with empty config, dashErrMsg.Error.
+- Side coverage: configPath 33% -> 100% (flag / local nestor.yml / home default branches), plus missing-config error paths for runListOut and runPullOut.
+- bubbletea v0.25 predates KeyPress — KeyMsg construction is `tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("tab")}`; msg.String() resolves the name.
+- Coverage: cmd 47.0% -> 59.3%. Dashboard model itself: View/render*/listLen/Init at 100%, Update 90.9%. All 313 tests pass (111 in cmd). Build clean. Vet clean. staticcheck clean. Pushed (commit df3694e).
+- Coverage standings: packages 96.1%, platform 96.4%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, snapshot 88.5%, cmd 59.3%.
+- Next: remaining cmd gaps are thin wrappers (runX -> runXOut glue at 0%, newDashboardCmd cobra wiring) plus runListOut/runPullOut middle paths (39-48%) — diminishing returns; consider calling the coverage campaign done and moving to v0.1 tagging prep.
