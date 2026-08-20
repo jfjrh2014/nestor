@@ -715,3 +715,11 @@ profiles:
 - Coverage: cmd 47.0% -> 59.3%. Dashboard model itself: View/render*/listLen/Init at 100%, Update 90.9%. All 313 tests pass (111 in cmd). Build clean. Vet clean. staticcheck clean. Pushed (commit df3694e).
 - Coverage standings: packages 96.1%, platform 96.4%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, snapshot 88.5%, cmd 59.3%.
 - Next: remaining cmd gaps are thin wrappers (runX -> runXOut glue at 0%, newDashboardCmd cobra wiring) plus runListOut/runPullOut middle paths (39-48%) — diminishing returns; consider calling the coverage campaign done and moving to v0.1 tagging prep.
+
+### 2026-08-20 — Daily dev session #53 — v0.1 tagging prep (blocked on workflow scope)
+
+- Verified full release matrix locally: linux/amd64+arm64, darwin/amd64+arm64, windows/amd64 all cross-compile clean with -ldflags version stamping; `nestor version` output correct (version/commit/date).
+- 313 tests green, vet clean, staticcheck clean, CGO_ENABLED=0 build clean.
+- Root-caused why zero workflow runs have ever executed: `.github/workflows/` (ci.yml, release.yml) exists on disk since Jun 23 but was **never committed** — the token's missing `workflow` scope rejects the push (reproduced today: "refusing to allow an OAuth App to create or update workflow"). Same blocker that stopped session #51.
+- Tagged v0.1.0 and pushed — no release workflow fired, as expected. Deleted the remote tag to avoid a release with no artifacts; local state rolled back clean.
+- Blocker for v0.1: add `workflow` scope to the GitHub token (gh auth refresh -s workflow), then commit the workflow files + re-tag.
