@@ -730,6 +730,6 @@ profiles:
 - `internal/vcs` at 70.3% with Push and Pull at 0% — never tested because they need a remote. Solution: a bare repo in t.TempDir() acts as the remote; no network, no stubs.
 - 8 new tests: Push round-trip to bare remote (asserts commit lands via `git -C remote log`), Pull end-to-end (clone seed clone, push second commit, pull into other clone, verify file arrives), Status error outside a repo, Init MkdirAll file-blocker failure, Init with file at .git, Commit git-add failure on broken repo, plus helpers (initRemoteRepo, commitFile).
 - Coverage: 70.3% -> 87.9%. Remaining gaps are git-failure branches that depend on git internals not worth simulating.
-- 325 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit eefef22).
+- 315 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit eefef22).
 - Coverage standings: packages 96.1%, platform 96.4%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, snapshot 88.5%, vcs 87.9%, restore 87.1%, shell 74.4%, cmd 59.3%.
 - Next: shell (74.4%) is the last package under 85% besides cmd glue. v0.1 release remains blocked on `gh auth refresh -s workflow`.
