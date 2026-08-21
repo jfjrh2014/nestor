@@ -723,3 +723,13 @@ profiles:
 - Root-caused why zero workflow runs have ever executed: `.github/workflows/` (ci.yml, release.yml) exists on disk since Jun 23 but was **never committed** — the token's missing `workflow` scope rejects the push (reproduced today: "refusing to allow an OAuth App to create or update workflow"). Same blocker that stopped session #51.
 - Tagged v0.1.0 and pushed — no release workflow fired, as expected. Deleted the remote tag to avoid a release with no artifacts; local state rolled back clean.
 - Blocker for v0.1: add `workflow` scope to the GitHub token (gh auth refresh -s workflow), then commit the workflow files + re-tag.
+
+### 2026-08-21 — Daily dev session #54 — vcs coverage push
+
+- v0.1 still blocked: token scopes re-checked today (admin:public_key, gist, read:org, repo, user — no `workflow`). Fell back to coverage work.
+- `internal/vcs` at 70.3% with Push and Pull at 0% — never tested because they need a remote. Solution: a bare repo in t.TempDir() acts as the remote; no network, no stubs.
+- 8 new tests: Push round-trip to bare remote (asserts commit lands via `git -C remote log`), Pull end-to-end (clone seed clone, push second commit, pull into other clone, verify file arrives), Status error outside a repo, Init MkdirAll file-blocker failure, Init with file at .git, Commit git-add failure on broken repo, plus helpers (initRemoteRepo, commitFile).
+- Coverage: 70.3% -> 87.9%. Remaining gaps are git-failure branches that depend on git internals not worth simulating.
+- 325 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit eefef22).
+- Coverage standings: packages 96.1%, platform 96.4%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, snapshot 88.5%, vcs 87.9%, restore 87.1%, shell 74.4%, cmd 59.3%.
+- Next: shell (74.4%) is the last package under 85% besides cmd glue. v0.1 release remains blocked on `gh auth refresh -s workflow`.
