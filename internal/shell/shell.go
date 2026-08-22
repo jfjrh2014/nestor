@@ -55,13 +55,14 @@ type PluginType int
 
 const (
 	PluginGitHub PluginType = iota
-	PluginNamed // standalone tool like "starship" — no action needed
+	PluginNamed             // standalone tool like "starship" — no action needed
 )
 
 // ParsePlugin classifies a plugin string from the config.
 // Formats:
-//   "starship"                      → named (standalone tool)
-//   "zsh-users/zsh-autosuggestions" → github
+//
+//	"starship"                      → named (standalone tool)
+//	"zsh-users/zsh-autosuggestions" → github
 func ParsePlugin(raw string) Plugin {
 	raw = strings.TrimSpace(raw)
 	parts := strings.SplitN(raw, "/", 2)
@@ -87,9 +88,9 @@ type PluginResult struct {
 type PluginStatus int
 
 const (
-	StatusInstalled    PluginStatus = iota // cloned / updated successfully
-	StatusSkipped                          // named plugin — nothing to do
-	StatusError                            // clone failed
+	StatusInstalled PluginStatus = iota // cloned / updated successfully
+	StatusSkipped                       // named plugin — nothing to do
+	StatusError                         // clone failed
 )
 
 // PluginsPath returns the directory where nestor clones shell plugins.
@@ -137,6 +138,12 @@ func InstallPlugins(rawPlugins []string) []PluginResult {
 	return results
 }
 
+// cloneURLFn resolves a plugin owner/repo pair to a git clone URL. Package
+// var so tests can point it at local fixtures instead of github.com.
+var cloneURLFn = func(owner, repo string) string {
+	return fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+}
+
 func cloneOrUpdate(owner, repo, localPath string) error {
 	// Already cloned? Try to pull.
 	if _, err := os.Stat(filepath.Join(localPath, ".git")); err == nil {
@@ -144,8 +151,7 @@ func cloneOrUpdate(owner, repo, localPath string) error {
 		return cmd.Run()
 	}
 
-	url := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
-	cmd := exec.Command("git", "clone", "--depth", "1", url, localPath)
+	cmd := exec.Command("git", "clone", "--depth", "1", cloneURLFn(owner, repo), localPath)
 	return cmd.Run()
 }
 

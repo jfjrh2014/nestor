@@ -2,7 +2,9 @@ package shell
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -198,6 +200,145 @@ func TestInstallPlugins_NamedOnly(t *testing.T) {
 		if r.Status != StatusSkipped {
 			t.Errorf("named plugin %q should be skipped, got status %d", r.Plugin.Raw, r.Status)
 		}
+	}
+}
+
+// fixtureRepo creates a local git repo with one commit and returns its path.
+func fixtureRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	git := func(args ...string) []string {
+		return append([]string{"-C", dir, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run(git("init", "-q")...)
+	run(git("commit", "--allow-empty", "-m", "init")...)
+	return dir
+}
+
+// TestInstallPlugins_GitHubClone exercises the real git round-trip against a
+// local fixture repo, via the cloneURLFn seam (0% -> covered without network).
+func TestInstallPlugins_GitHubClone(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	src := fixtureRepo(t)
+	orig := cloneURLFn
+	cloneURLFn = func(owner, repo string) string { return src }
+	t.Cleanup(func() { cloneURLFn = orig })
+
+	results := InstallPlugins([]string{"acme/plugin-one", "acme/plugin-two", "starship"})
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+
+	r1 := results[0]
+	if r1.Status != StatusInstalled {
+		t.Fatalf("plugin-one: status=%d, err=%v", r1.Status, r1.Err)
+	}
+	if r1.Path == "" || !strings.HasSuffix(r1.Path, "plugin-one") {
+		t.Errorf("plugin-one path = %q, want suffix plugin-one", r1.Path)
+	}
+	// The .git dir proves a real clone happened.
+	if fi, err := os.Stat(filepath.Join(r1.Path, ".git")); err != nil || !fi.IsDir() {
+		t.Errorf("expected %s/.git to be a dir, err=%v", r1.Path, err)
+	}
+
+	if results[2].Status != StatusSkipped {
+		t.Errorf("starship should stay skipped, got %d", results[2].Status)
+	}
+}
+
+// TestInstallPlugins_GitHubPull covers the already-cloned branch: second run
+// must pull --ff-only, not try to re-clone.
+func TestInstallPlugins_GitHubPull(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	src := fixtureRepo(t)
+	orig := cloneURLFn
+	cloneURLFn = func(owner, repo string) string { return src }
+	t.Cleanup(func() { cloneURLFn = orig })
+
+	raw := "acme/plugin-one"
+	if r := InstallPlugins([]string{raw})[0]; r.Status != StatusInstalled {
+		t.Fatalf("first install: status=%d, err=%v", r.Status, r.Err)
+	}
+
+	// New commit on the source; second run takes the pull branch.
+	if out, err := exec.Command("git", "-C", src, "-c", "user.email=t@t", "-c", "user.name=t",
+		"commit", "--allow-empty", "-m", "second").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	results := InstallPlugins([]string{raw})
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != StatusInstalled {
+		t.Errorf("second install (pull path): status=%d, err=%v", results[0].Status, results[0].Err)
+	}
+}
+
+// TestInstallPlugins_Clonerror covers the failure branch: cloneURLFn points at
+// a path that isn't a repo, git clone fails, result carries StatusError.
+func TestInstallPlugins_Clonerror(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	empty := t.TempDir()
+	orig := cloneURLFn
+	cloneURLFn = func(owner, repo string) string { return empty }
+	t.Cleanup(func() { cloneURLFn = orig })
+
+	results := InstallPlugins([]string{"acme/broken"})
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError, got %d", r.Status)
+	}
+	if r.Err == nil {
+		t.Error("expected non-nil Err on clone failure")
+	}
+}
+
+func TestPluginsPath(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+
+	got, err := PluginsPath()
+	if err != nil {
+		t.Fatalf("PluginsPath: %v", err)
+	}
+	want := filepath.Join(cfg, "nestor", "plugins")
+	if got != want {
+		t.Errorf("PluginsPath() = %q, want %q", got, want)
+	}
+}
+
+func TestWriteSourceBlock_NoTrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	rcPath := filepath.Join(dir, ".zshrc")
+
+	// Existing content WITHOUT trailing newline — the append branch must add one
+	// before the block so the marker starts on its own line.
+	os.WriteFile(rcPath, []byte("export EDITOR=vim"), 0644)
+
+	if err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"}); err != nil {
+		t.Fatalf("WriteSourceBlock: %v", err)
+	}
+
+	data, _ := os.ReadFile(rcPath)
+	content := string(data)
+	if !contains(content, "export EDITOR=vim\n") {
+		t.Errorf("expected newline inserted between content and block:\n%q", content)
+	}
+	if !contains(content, markerBegin) {
+		t.Error("missing begin marker")
 	}
 }
 
