@@ -733,3 +733,12 @@ profiles:
 - 315 tests pass (12/12 packages). Build clean. Vet clean. staticcheck clean. Pushed (commit eefef22).
 - Coverage standings: packages 96.1%, platform 96.4%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, snapshot 88.5%, vcs 87.9%, restore 87.1%, shell 74.4%, cmd 59.3%.
 - Next: shell (74.4%) is the last package under 85% besides cmd glue. v0.1 release remains blocked on `gh auth refresh -s workflow`.
+
+### 2026-08-22 — Daily dev session #55 — shell coverage push
+
+- `internal/shell` at 74.4%: `cloneOrUpdate` sat at 0% — it hardcoded the `github.com` clone URL, so the clone/pull/failure branches were unreachable without network access.
+- Extracted `cloneURLFn` package var (same seam family as #46 cmdRunner through #52), pointed tests at a local git fixture repo: real `git clone --depth 1` round-trip (asserts `.git` lands in the plugins dir), second-run `pull --ff-only` branch (new source commit pulled without re-clone), clone failure -> StatusError with non-nil Err.
+- 7 new tests: the three git paths, PluginsPath exact-path, WriteSourceBlock append-without-trailing-newline, plus the existing named-only test kept intact.
+- Coverage: 74.4% -> 89.7% (cloneOrUpdate 0% -> 100%, InstallPlugins 50% -> 80%, WriteSourceBlock 89.5% -> 94.7%). 320 tests, 12/12 packages. Build clean. Vet clean. Staticcheck clean. Pushed (commit d0462c6).
+- Coverage standings: platform 96.4%, packages 96.1%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, snapshot 88.5%, shell 89.7%, vcs 87.9%, restore 87.1%, cmd 59.3%.
+- Every internal package is now 85%+ except cmd cobra-glue wrappers. Coverage campaign complete. v0.1 remains blocked on `workflow` scope on the token.
