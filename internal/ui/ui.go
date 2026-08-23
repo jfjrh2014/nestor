@@ -50,7 +50,7 @@ func (p *Printer) Error(msg string) {
 
 // Info prints a dim informational line.
 func (p *Printer) Info(msg string) {
-	fmt.Fprintf(p.w, "%s%s%s\n", gray, reset, msg)
+	fmt.Fprintf(p.w, "%s%s%s\n", gray, msg, reset)
 }
 
 // Detail prints a label: value pair.
