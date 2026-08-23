@@ -742,3 +742,11 @@ profiles:
 - Coverage: 74.4% -> 89.7% (cloneOrUpdate 0% -> 100%, InstallPlugins 50% -> 80%, WriteSourceBlock 89.5% -> 94.7%). 320 tests, 12/12 packages. Build clean. Vet clean. Staticcheck clean. Pushed (commit d0462c6).
 - Coverage standings: platform 96.4%, packages 96.1%, secrets 94.9%, config 93.9%, importer 92.9%, dotfiles 91.8%, ci 88.5%, snapshot 88.5%, shell 89.7%, vcs 87.9%, restore 87.1%, cmd 59.3%.
 - Every internal package is now 85%+ except cmd cobra-glue wrappers. Coverage campaign complete. v0.1 remains blocked on `workflow` scope on the token.
+
+### 2026-08-23 — Daily dev session #56 — ui package: last untested package, one more dead-value bug
+
+- `internal/ui` had zero tests — the only package left with no test file at all.
+- 6 tests in `ui_test.go`: Step icon->color table (green/yellow/red/cyan-default incl. a non-✓/!/✗ icon), OK/Warn/Error/Info exact ANSI output, Detail, Header, and a combined sequential-output test. Coverage: 100.0%.
+- Writing them immediately caught a real bug: `Info` was `Fprintf(w, gray, reset, msg)` — gray applied then instantly reset before the message, so every Info ("dim") line ever printed rendered completely unstyled. Fix: `gray, msg, reset`. Same computed-value-discarded family as sessions #22/#24/#25/#27, this time in an escape-code argument order.
+- 325 tests pass (13/13 packages). Build clean. Vet clean. Staticcheck clean. Pushed (commit 9c74db3).
+- With ui at 100%, the whole repo is now tested. Remaining v0.1 blocker unchanged: token lacks `workflow` scope (`gh auth refresh -s workflow`).
