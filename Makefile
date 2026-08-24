@@ -4,7 +4,7 @@ COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-.PHONY: build test vet lint clean install release release-dry
+.PHONY: build test vet lint fmt fmt-check clean install release release-dry
 
 ## build: compile the binary into ./nestor
 build:
@@ -21,6 +21,17 @@ vet:
 ## lint: run golangci-lint (install: https://golangci-lint.run)
 lint:
 	golangci-lint run ./...
+
+## fmt: gofmt all source files in place
+fmt:
+	gofmt -w .
+
+## fmt-check: fail if any file is not gofmt-clean (CI gate)
+fmt-check:
+	@files=$$(gofmt -l .); \
+	if [ -n "$$files" ]; then \
+		echo "gofmt needed on:"; echo "$$files"; exit 1; \
+	fi
 
 ## install: build and install to GOPATH/bin
 install:

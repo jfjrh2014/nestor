@@ -750,3 +750,14 @@ profiles:
 - Writing them immediately caught a real bug: `Info` was `Fprintf(w, gray, reset, msg)` — gray applied then instantly reset before the message, so every Info ("dim") line ever printed rendered completely unstyled. Fix: `gray, msg, reset`. Same computed-value-discarded family as sessions #22/#24/#25/#27, this time in an escape-code argument order.
 - 325 tests pass (13/13 packages). Build clean. Vet clean. Staticcheck clean. Pushed (commit 9c74db3).
 - With ui at 100%, the whole repo is now tested. Remaining v0.1 blocker unchanged: token lacks `workflow` scope (`gh auth refresh -s workflow`).
+
+### 2026-08-24 — Daily dev session #57 — v0.1 release audit (gofmt, race detector)
+
+- All planned features shipped + coverage campaign done, so today was a release-readiness audit instead of a new feature.
+- Token scopes re-checked: still no `workflow` scope — v0.1 remains blocked on `gh auth refresh -s workflow`.
+- Audit findings: README complete and current (all 19 commands documented), working tree clean (binary/test artifacts ignored), TODO/FIXME scan empty.
+- Real finding: 12 files had drifted out of gofmt (dashboard, restore, config, secrets, ui + 7 test files). Formatted them — whitespace/alignment only, zero semantic changes. Pushed (commit 9775ac4).
+- Added `make fmt` and `make fmt-check` (fails on unformatted files) so CI can gate on this once workflows land. fmt-check logic verified directly (make itself isn't installed on the dev host).
+- First full `go test -race` run on the repo: clean across 13/13 packages.
+- Full gate: 325 tests green, vet clean, staticcheck clean, CGO_ENABLED=0 build clean.
+- Ship state: v0.1 is one command away — `gh auth refresh -s workflow`, then commit .github/workflows + tag v0.1.0.
