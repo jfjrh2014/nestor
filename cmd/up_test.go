@@ -61,7 +61,6 @@ func TestHasSecretsEmptyProviderRegression(t *testing.T) {
 	}
 }
 
-
 func TestSnapshotDestPaths(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -72,7 +71,7 @@ func TestSnapshotDestPaths(t *testing.T) {
 		{
 			name: "nil if no base or profile templates",
 			cfg: &config.Config{
-				Version: 1,
+				Version:  1,
 				Profiles: map[string]config.Profile{},
 			},
 			profile: "",

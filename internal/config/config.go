@@ -10,11 +10,11 @@ import (
 
 // Config represents the top-level nestor.yml
 type Config struct {
-	Version  int       `yaml:"version"`
-	Packages Packages  `yaml:"packages"`
-	Dotfiles Dotfiles  `yaml:"dotfiles"`
-	Secrets  Secrets   `yaml:"secrets"`
-	Shells   Shells    `yaml:"shells"`
+	Version  int                `yaml:"version"`
+	Packages Packages           `yaml:"packages"`
+	Dotfiles Dotfiles           `yaml:"dotfiles"`
+	Secrets  Secrets            `yaml:"secrets"`
+	Shells   Shells             `yaml:"shells"`
 	Profiles map[string]Profile `yaml:"profiles"`
 }
 
@@ -60,9 +60,9 @@ type Shells struct {
 // Profile defines a named set of extra packages, dotfile variants, and secrets
 // that layer on top of the base config when activated.
 type Profile struct {
-	Packages        []string  `yaml:"packages"`
-	Dotfiles        []Template `yaml:"dotfiles"`
-	SecretMappings  []Mapping  `yaml:"secrets"`
+	Packages       []string   `yaml:"packages"`
+	Dotfiles       []Template `yaml:"dotfiles"`
+	SecretMappings []Mapping  `yaml:"secrets"`
 }
 
 // ValidProfile returns true if a profile with the given name is defined.

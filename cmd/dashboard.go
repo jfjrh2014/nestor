@@ -71,8 +71,8 @@ type dashboardModel struct {
 	height    int
 
 	// collected status data
-	platformInfo platform.Info
-	pkgSpecs     []packages.Spec
+	platformInfo   platform.Info
+	pkgSpecs       []packages.Spec
 	installedCount int
 	missingPkgs    []packages.Spec
 

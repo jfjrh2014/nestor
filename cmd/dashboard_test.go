@@ -176,10 +176,10 @@ func TestDashDotfileAbsent(t *testing.T) {
 // ever sees it.
 func TestDashDotfileStatusMapping(t *testing.T) {
 	cases := []struct {
-		name         string
-		status       dotfiles.CheckStatus
-		wantPresent  bool
-		wantDrift    bool
+		name        string
+		status      dotfiles.CheckStatus
+		wantPresent bool
+		wantDrift   bool
 	}{
 		{"present", dotfiles.CheckPresent, true, false},
 		{"drifted", dotfiles.CheckDrifted, true, true},
@@ -448,7 +448,6 @@ func TestDashboardViewSecrets(t *testing.T) {
 		t.Errorf("empty secrets should render placeholder, got %q", e)
 	}
 }
-
 
 func TestDashLoadStatus(t *testing.T) {
 	dir := t.TempDir()

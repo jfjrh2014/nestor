@@ -20,7 +20,7 @@ const (
 
 // Printer writes styled lines to a writer.
 type Printer struct {
-	w  io.Writer
+	w io.Writer
 }
 
 // New returns a Printer writing to w.

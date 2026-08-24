@@ -115,8 +115,8 @@ func NewProvider(name string) (Provider, error) {
 
 // Mapping mirrors the config Mapping struct.
 type Mapping struct {
-	Key     string
-	Inject  map[string]string // dest path → template string with {{.key}}
+	Key    string
+	Inject map[string]string // dest path → template string with {{.key}}
 }
 
 // ResolveAll resolves every mapping key and returns a key→value map.

@@ -57,7 +57,7 @@ func TestCopyDotfileTemplatesPartialFailure(t *testing.T) {
 	}
 
 	templates := []config.Template{
-		{Src: ".bashrc.tmpl", Dest: "~/.bashrc"},      // exists
+		{Src: ".bashrc.tmpl", Dest: "~/.bashrc"},       // exists
 		{Src: ".gitconfig.tmpl", Dest: "~/.gitconfig"}, // missing in home — skip
 	}
 

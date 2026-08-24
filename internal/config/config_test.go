@@ -426,7 +426,7 @@ func TestValidateRejectsProfileSecretMissingKey(t *testing.T) {
 
 func TestValidateAcceptsValidConfig(t *testing.T) {
 	cfg := &Config{
-		Version: 1,
+		Version:  1,
 		Packages: Packages{Common: []string{"git"}},
 		Dotfiles: Dotfiles{
 			Strategy: "copy",

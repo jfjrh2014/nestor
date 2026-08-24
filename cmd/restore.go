@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	restoreForce   bool
-	restoreDryRun  bool
-	restoreOutput  string
+	restoreForce  bool
+	restoreDryRun bool
+	restoreOutput string
 )
 
 var restoreCmd = &cobra.Command{

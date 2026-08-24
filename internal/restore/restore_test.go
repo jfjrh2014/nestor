@@ -247,7 +247,7 @@ func TestPreview(t *testing.T) {
 
 	checks := []string{
 		"version: 1",
-		"packages (3)",            // 2 common + 1 linux
+		"packages (3)", // 2 common + 1 linux
 		"neovim",
 		"htop (Linux)",
 		"dotfiles (1 templates",

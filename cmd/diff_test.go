@@ -8,15 +8,15 @@ import (
 
 func TestUntrackedPackages(t *testing.T) {
 	configured := map[string]bool{
-		"git":    true,
-		"curl":   true,
-		"tmux":   true,
-		"jq":     true,
+		"git":     true,
+		"curl":    true,
+		"tmux":    true,
+		"jq":      true,
 		"nonconf": false, // explicit — never in config
 	}
 
 	tests := []struct {
-		name      string
+		name       string
 		configured map[string]bool
 		installed  []string
 		want       []string
