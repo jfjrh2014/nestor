@@ -761,3 +761,12 @@ profiles:
 - First full `go test -race` run on the repo: clean across 13/13 packages.
 - Full gate: 325 tests green, vet clean, staticcheck clean, CGO_ENABLED=0 build clean.
 - Ship state: v0.1 is one command away — `gh auth refresh -s workflow`, then commit .github/workflows + tag v0.1.0.
+
+### 2026-08-25 — Daily dev session #58 — release prep: CHANGELOG + CI workflow hardening
+
+- v0.1 blocker re-verified: token scopes unchanged (no `workflow`). Everything that ships without it is now shipped.
+- Added CHANGELOG.md (v0.1 notes: features, dead-value bug fixes, engineering stats). Pushed (commit d808523).
+- ci.yml (staged, pending scope): trimmed matrix to ['1.19','1.22'] — go.mod requires 1.19 and CI never ran before, so no compat history to preserve; added gofmt gate step (matches `make fmt-check`, session #57).
+- Both workflow YAMLs validated syntactically; ldflags version stamping re-verified (version/commit/date all flow through).
+- Full gate: 325 tests green (13/13), vet clean, staticcheck clean, gofmt clean, CGO_ENABLED=0 build clean.
+- Ship state: repo is release-complete. The ONLY remaining v0.1 step is `gh auth refresh -s workflow`, then: commit .github/, push, tag v0.1.0, release.yml builds all 5 targets with checksums.
