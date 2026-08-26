@@ -90,7 +90,7 @@ profiles:
 |---|---|
 | `nestor init` | Create a starter nestor.yml |
 | `nestor up [--profile <name>]` | Bootstrap packages, dotfiles, secrets, shell from config |
-| `nestor diff` | Show drift between config and live state |
+| `nestor diff [--profile <name>]` | Show drift between config and live state (profile-aware) |
 | `nestor sync` | Capture current machine state into config |
 | `nestor list` | Show all managed items with install status |
 | `nestor add [package\|dotfile\|secret] <name>` | Interactively add to config |

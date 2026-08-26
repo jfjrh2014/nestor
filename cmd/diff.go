@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/jfjrh2014/nestor/internal/config"
@@ -13,23 +14,41 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var diffProfileFlag string
+
 var diffCmd = &cobra.Command{
 	Use:   "diff",
 	Short: "Show drift between live machine state and nestor.yml",
 	Long: `Compares your current machine against nestor.yml:
 which packages are missing, extra, or which dotfiles have drifted
-from their template source.`,
+from their template source.
+Use --profile to include a named profile's packages and dotfiles
+in the comparison (mirrors 'nestor up --profile').`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runDiff(cmd.Context())
 	},
 }
 
 func init() {
+	diffCmd.Flags().StringVarP(&diffProfileFlag, "profile", "p", "", "compare against a named profile (extra packages/dotfiles)")
 	rootCmd.AddCommand(diffCmd)
 }
 
 func runDiff(ctx context.Context) error {
-	p := ui.New(os.Stdout)
+	profileName, _ := ctx.Value(profileKey{}).(string)
+	if profileName == "" {
+		profileName = diffProfileFlag
+	}
+	return runDiffOut(ctx, profileName, os.Stdout)
+}
+
+// runDiffOut is the writer-injected core of 'nestor diff' (pattern from
+// sessions #18-#43). It compares live machine state against the config,
+// optionally layered with a named profile exactly as 'nestor up' does —
+// otherwise packages installed by 'up --profile X' would be reported as
+// untracked drift by 'diff'.
+func runDiffOut(ctx context.Context, profileName string, w io.Writer) error {
+	p := ui.New(w)
 
 	path := configPath()
 	cfg, err := config.Load(path)
@@ -37,6 +56,13 @@ func runDiff(ctx context.Context) error {
 		return fmt.Errorf("diff: %w", err)
 	}
 	p.OK(fmt.Sprintf("config loaded from %s", path))
+
+	if profileName != "" {
+		if !cfg.ValidProfile(profileName) {
+			return fmt.Errorf("unknown profile: %s", profileName)
+		}
+		p.OK(fmt.Sprintf("profile: %s", profileName))
+	}
 
 	plat, err := platform.Detect()
 	if err != nil {
@@ -55,12 +81,17 @@ func runDiff(ctx context.Context) error {
 			"wsl":   cfg.Packages.WSL,
 		},
 	}
-	specs := make([]packages.Spec, 0)
-	for _, raw := range resolver.Resolve(plat.OS) {
+	resolved := resolver.Resolve(plat.OS)
+	if profileName != "" {
+		resolved = append(resolved, cfg.ProfilePackages(profileName)...)
+	}
+
+	specs := make([]packages.Spec, 0, len(resolved))
+	for _, raw := range resolved {
 		specs = append(specs, packages.ParseSpec(raw, plat.PackageManager))
 	}
 
-	// Names tracked in config, for untracked-package detection.
+	// Names tracked in config (+ active profile), for untracked-package detection.
 	configured := make(map[string]bool, len(specs))
 	for _, s := range specs {
 		configured[s.Name] = true
@@ -82,7 +113,7 @@ func runDiff(ctx context.Context) error {
 		}
 	}
 
-	// Installed dev packages not declared in config = drift ("extra").
+	// Installed dev packages not declared in config (or profile) = drift ("extra").
 	untracked := untrackedPackages(configured, scanPackages(plat.PackageManager))
 	for _, name := range untracked {
 		extra++
@@ -101,7 +132,11 @@ func runDiff(ctx context.Context) error {
 
 	// --- dotfiles ---
 	p.Header("dotfiles")
-	if len(cfg.Dotfiles.Templates) == 0 {
+	templates := cfg.Dotfiles.Templates
+	if profileName != "" {
+		templates = append(templates, cfg.ProfileDotfiles(profileName)...)
+	}
+	if len(templates) == 0 {
 		p.Info("no templates declared")
 	} else {
 		strategy := dotfiles.Strategy(cfg.Dotfiles.Strategy)
@@ -115,7 +150,7 @@ func runDiff(ctx context.Context) error {
 		}
 
 		present, drifted, absent := 0, 0, 0
-		for _, t := range cfg.Dotfiles.Templates {
+		for _, t := range templates {
 			deployer := dotfiles.Deployer{Strategy: strategy, Source: source}
 			status := deployer.Check(t.Src, t.Dest)
 			switch status {
