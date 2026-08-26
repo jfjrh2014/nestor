@@ -770,3 +770,14 @@ profiles:
 - Both workflow YAMLs validated syntactically; ldflags version stamping re-verified (version/commit/date all flow through).
 - Full gate: 325 tests green (13/13), vet clean, staticcheck clean, gofmt clean, CGO_ENABLED=0 build clean.
 - Ship state: repo is release-complete. The ONLY remaining v0.1 step is `gh auth refresh -s workflow`, then: commit .github/, push, tag v0.1.0, release.yml builds all 5 targets with checksums.
+
+### 2026-08-26 — Daily dev session #59 — profile-aware drift detection
+
+- v0.1 still blocked: token scopes re-checked (admin:public_key, gist, read:org, repo, user — no `workflow`). Bug-hunt session instead.
+- Found a real one in the project's headline feature: `nestor up --profile X` installs profile packages and deploys profile dotfiles, but `nestor diff` compared only against the base config — so everything a profile added was reported as "extra (not tracked)" drift. The drift detector fought the profile system (sessions #19/#35 wired the rest; diff was never touched).
+- Fix: `--profile/-p` flag on diff, validated like up (unknown profile = hard error). ProfilePackages layered into the tracked set, ProfileDotfiles into the checked templates, same resolution order as up.
+- Also extracted `runDiffOut(ctx, profile, io.Writer)` — diff was the last command still constructing `ui.New(os.Stdout)` inline (missed by the #18–#43 series; up and sync retain theirs for now since their logic is already testable).
+- 3 new tests: profile-package regression (vim untracked in base diff, clean with --profile), unknown-profile error, profile-dotfile drift check. Test helper `runDiffForTest` follows the `runDoctorForTest` cfgFile-swap pattern.
+- One test-data lesson: the host scans real packages (curl/git/vim/wget), so asserting on a package that exists on the machine (vim) makes the regression test deterministic both ways.
+- README diff row updated with the flag. All 328 tests pass (13/13 packages). Build clean. Vet clean. Staticcheck clean. Pushed (commit b4b6766).
+- Next: v0.1 once `gh auth refresh -s workflow` lands; sync/up still have inline ui.New but both have full test coverage.
