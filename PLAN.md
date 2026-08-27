@@ -781,3 +781,11 @@ profiles:
 - One test-data lesson: the host scans real packages (curl/git/vim/wget), so asserting on a package that exists on the machine (vim) makes the regression test deterministic both ways.
 - README diff row updated with the flag. All 328 tests pass (13/13 packages). Build clean. Vet clean. Staticcheck clean. Pushed (commit b4b6766).
 - Next: v0.1 once `gh auth refresh -s workflow` lands; sync/up still have inline ui.New but both have full test coverage.
+
+### 2026-08-27 — Daily dev session #60 — snapshot manifest ID linkage
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`).
+- Bug-hunt found the dead-value family again, this time in snapshots: `freshSnapshotDir` allocates a unique snapshot ID (with same-second `-N` suffixing) but `createIn` discarded it (`_ = id`). Manifests recorded no ID, so nothing tied a manifest.json to its directory — renaming/copying a snapshot dir went silently undetected on rollback.
+- Fix: `Snapshot.ID` field (json `id,omitempty`), set at creation; `restoreIn` now errors on `manifest ID != dir ID`; ID-less legacy manifests still restore.
+- 2 new tests: mismatch rejection (renamed dir) and legacy compatibility. 330 tests, 13/13 packages. gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit 5cacf12).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
