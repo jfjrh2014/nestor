@@ -749,3 +749,65 @@ func TestListInReadError(t *testing.T) {
 		t.Error("listIn under a file should fail")
 	}
 }
+
+// TestRestoreRejectsManifestDirMismatch verifies restoreIn refuses a manifest
+// whose persisted ID points at a different snapshot directory — the manifest
+// may have been copied or a dir renamed, and restoring from the wrong pairing
+// would silently roll back files from an unexpected snapshot.
+func TestRestoreRejectsManifestDirMismatch(t *testing.T) {
+	base := t.TempDir()
+	orig := filepath.Join(base, "config.txt")
+	os.WriteFile(orig, []byte("before"), 0o644)
+
+	if _, err := createIn(base, []string{orig}); err != nil {
+		t.Fatalf("createIn: %v", err)
+	}
+
+	// Rename the snapshot dir so the manifest's persisted ID no longer matches.
+	dir := snapshotIDFromBase(base)
+	renamed := filepath.Join(base, dir+"-moved")
+	if err := os.Rename(filepath.Join(base, dir), renamed); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	if _, err := restoreIn(base, dir+"-moved"); err == nil {
+		t.Fatal("restoreIn with mismatched manifest ID: expected error, got nil")
+	}
+}
+
+// TestRestoreAcceptsLegacyManifestWithoutID ensures snapshots created before
+// the ID field existed (id omitted from their manifests) still restore.
+func TestRestoreAcceptsLegacyManifestWithoutID(t *testing.T) {
+	base := t.TempDir()
+	orig := filepath.Join(base, "config.txt")
+	os.WriteFile(orig, []byte("before"), 0o644)
+
+	id, _, err := freshSnapshotDir(base)
+	if err != nil {
+		t.Fatalf("freshSnapshotDir: %v", err)
+	}
+
+	// Hand-write a manifest without an ID, as older versions did. Backup
+	// paths are flat, relative to the snapshot dir.
+	backupRel := "config.txt.bak"
+	legacy := fmt.Sprintf(`{"created_at":"2026-01-01T00:00:00Z","files":[{"original":%q,"backup":%q}]}`,
+		orig, backupRel)
+	if err := os.WriteFile(filepath.Join(base, id, "manifest.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write legacy manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, id, backupRel), []byte("before"), 0o644); err != nil {
+		t.Fatalf("write backup copy: %v", err)
+	}
+
+	restored, err := restoreIn(base, id)
+	if err != nil {
+		t.Fatalf("restoreIn legacy manifest: %v", err)
+	}
+	if len(restored.Files) != 1 || restored.Files[0].Original != orig {
+		t.Fatalf("restored = %+v, want 1 file at %q", restored.Files, orig)
+	}
+	data, _ := os.ReadFile(orig)
+	if string(data) != "before" {
+		t.Errorf("file content after restore = %q, want %q", data, "before")
+	}
+}

@@ -14,6 +14,7 @@ import (
 
 // A Snapshot records the files that were backed up before a deploy.
 type Snapshot struct {
+	ID        string    `json:"id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	Files     []FileRef `json:"files"`
 }
@@ -56,6 +57,7 @@ func createIn(base string, destPaths []string) (*Snapshot, error) {
 	}
 
 	snap := &Snapshot{
+		ID:        id,
 		CreatedAt: time.Now().UTC(),
 		Files:     make([]FileRef, 0, len(destPaths)),
 	}
@@ -90,7 +92,7 @@ func createIn(base string, destPaths []string) (*Snapshot, error) {
 		return nil, err
 	}
 
-	_ = id // id is embedded in snapDir's path; stored in CreatedAt for ordering
+	// id is persisted in the manifest via Snapshot.ID; the dir name carries it too.
 	return snap, nil
 }
 
@@ -178,6 +180,10 @@ func restoreIn(base, id string) (*Snapshot, error) {
 	var snap Snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, fmt.Errorf("parsing manifest: %w", err)
+	}
+
+	if snap.ID != "" && snap.ID != id {
+		return nil, fmt.Errorf("manifest id %q does not match snapshot dir %q", snap.ID, id)
 	}
 
 	for _, f := range snap.Files {
