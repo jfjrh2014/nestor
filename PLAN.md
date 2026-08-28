@@ -789,3 +789,14 @@ profiles:
 - Fix: `Snapshot.ID` field (json `id,omitempty`), set at creation; `restoreIn` now errors on `manifest ID != dir ID`; ID-less legacy manifests still restore.
 - 2 new tests: mismatch rejection (renamed dir) and legacy compatibility. 330 tests, 13/13 packages. gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit 5cacf12).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+
+### 2026-08-28 — Daily dev session #61 — prune phantom-ID guard
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`). Bug-hunt session.
+- Dead-value/phantom family, one layer above #60: `pruneIn` computed the keep-cut from a single `listIn` call, then deleted blindly by slice offsets. A listed ID whose dir had vanished out-of-band shifted the cut into snapshots the user asked to keep (with [phantom, B, C(keep=2)], real C got deleted) AND landed in the returned `removed` list — "the IDs of the snapshots it deleted" was fiction.
+- Fix: stat-check each ID; phantoms are skipped, the keep quota counts existing dirs only, `removed` reports only verified deletions. Non-ENOENT stat errors surface with the partial removed list.
+- `listIn` extracted to a package var seam (same family as the #46–#52 FN seams) so phantoms are testable without races.
+- New tests: phantom-newest regression (old code deletes a kept snapshot — verified by test comment), all-phantoms noop, removed-IDs-really-deleted contract, ENOTDIR stat-error path. 4 tests, snapshot package 88.6% -> 88.3% overall but pruneIn 0% delta -> 89.5%.
+- Full gate round 2: one more lesson — the first test draft stubbed listIn and then asserted remaining state THROUGH the stub, which returned fixture fiction instead of disk; tests now un-stub before asserting disk state, and the phantom list was rebuilt newest-first (the first version was oldest-first, testing nothing).
+- 333 tests pass (13/13 packages). gofmt, vet, staticcheck clean. CGO_ENABLED=0 build clean. Pushed (commit 7d3f154).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
