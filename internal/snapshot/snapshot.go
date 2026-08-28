@@ -131,7 +131,7 @@ func List() ([]string, error) {
 	return listIn(base)
 }
 
-func listIn(base string) ([]string, error) {
+var listIn = func(base string) ([]string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -221,6 +221,11 @@ func Prune(keep int) ([]string, error) {
 	return pruneIn(base, keep)
 }
 
+// pruneIn keeps the `keep` most recent snapshots that actually exist and
+// removes the rest, returning the real IDs deleted. IDs that vanish from disk
+// between the listing and the delete (moved, removed out-of-band by a test or
+// a race) are ignored: computing the cut from those phantoms would shift it
+// into snapshots the user asked to keep.
 func pruneIn(base string, keep int) ([]string, error) {
 	if keep <= 0 {
 		return nil, nil
@@ -229,12 +234,19 @@ func pruneIn(base string, keep int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(ids) <= keep {
-		return nil, nil
-	}
-	// ids is newest-first; the oldest (len-keep) entries are pruned.
-	removed := make([]string, 0, len(ids)-keep)
-	for _, id := range ids[keep:] {
+	kept := 0
+	var removed []string
+	for _, id := range ids { // newest-first
+		if _, err := os.Stat(filepath.Join(base, id)); err != nil {
+			if os.IsNotExist(err) {
+				continue // vanished out-of-band: not ours to prune or count
+			}
+			return removed, fmt.Errorf("stat snapshot %s: %w", id, err)
+		}
+		if kept < keep {
+			kept++
+			continue
+		}
 		if err := os.RemoveAll(filepath.Join(base, id)); err != nil {
 			return removed, fmt.Errorf("delete snapshot %s: %w", id, err)
 		}

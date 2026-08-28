@@ -811,3 +811,136 @@ func TestRestoreAcceptsLegacyManifestWithoutID(t *testing.T) {
 		t.Errorf("file content after restore = %q, want %q", data, "before")
 	}
 }
+
+// --- session #61: prune phantom-ID guard ---
+
+// swapList redirects listIn to a stub for one test.
+func swapList(t *testing.T, fn func(base string) ([]string, error)) {
+	t.Helper()
+	old := listIn
+	listIn = fn
+	t.Cleanup(func() { listIn = old })
+}
+
+// TestPruneIgnoresPhantomIDs: a listed ID whose dir vanished out-of-band must
+// not consume a keep slot nor shift the cut into kept snapshots. The real
+// newest `keep` survive; only real, over-quota dirs are deleted and reported.
+func TestPruneIgnoresPhantomIDs(t *testing.T) {
+	base := t.TempDir()
+	real := []string{"20200101-120000", "20200201-120000", "20200301-120000"}
+	makeSnapshots(t, base, real)
+	var orig func(base string) ([]string, error)
+	// Phantom is the NEWEST entry: worst case — it occupies a keep slot and,
+	// under the old slice-cut logic, pushed the real DELETE cut one too deep.
+	// Newest-first, phantom on top (worst case: it sits in a keep slot).
+	phantomList := []string{
+		"20200901-000000", // phantom: dir does not exist
+		"20200301-120000",
+		"20200201-120000",
+		"20200101-120000",
+	}
+
+	orig = listIn
+	swapList(t, func(b string) ([]string, error) {
+		if b == base {
+			return phantomList, nil
+		}
+		return orig(b)
+	})
+
+	removed, err := pruneIn(base, 2)
+	if err != nil {
+		t.Fatalf("pruneIn: %v", err)
+	}
+	// old behavior: removal cut shifted into kept snapshots and the phantom
+	// got no special treatment. New: phantom skipped, one real removal.
+	want := "20200101-120000"
+	if len(removed) != 1 || removed[0] != want {
+		t.Fatalf("removed = %v, want [%s]", removed, want)
+	}
+	listIn = orig // un-stub before reading real disk state
+	remaining, err := listIn(base)
+	if err != nil {
+		t.Fatalf("listIn: %v", err)
+	}
+	if len(remaining) != 2 ||
+		remaining[0] != "20200301-120000" || remaining[1] != "20200201-120000" {
+		t.Fatalf("remaining = %v, want newest 2 real dirs intact", remaining)
+	}
+}
+
+// TestPruneAllPhantomsIsNoop: if every listed ID is a phantom, prune deletes
+// nothing and reports no removals.
+func TestPruneAllPhantomsIsNoop(t *testing.T) {
+	base := t.TempDir()
+	makeSnapshots(t, base, []string{"20200101-120000", "20200201-120000"})
+
+	orig := listIn
+	swapList(t, func(b string) ([]string, error) {
+		if b == base {
+			return []string{"20200901-000000", "20200902-000000", "20200903-000000"}, nil
+		}
+		return orig(b)
+	})
+
+	removed, err := pruneIn(base, 1)
+	if err != nil {
+		t.Fatalf("pruneIn: %v", err)
+	}
+	if removed != nil {
+		t.Errorf("phantoms must not be reported as removed, got %v", removed)
+	}
+	listIn = orig // un-stub before reading real disk state
+	remaining, _ := listIn(base)
+	if len(remaining) != 2 {
+		t.Errorf("all-phantom prune must not touch real dirs, remaining=%d", len(remaining))
+	}
+}
+
+// TestPruneStatError surfaces non-ENOENT stat failures as errors: when the
+// snapshot base is a file, Stat(base/id) fails with ENOTDIR and pruneIn must
+// stop rather than treat the entry as prunable.
+func TestPruneStatError(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := listIn
+	swapList(t, func(b string) ([]string, error) {
+		if b == blocker {
+			return []string{"20200101-120000"}, nil
+		}
+		return orig(b)
+	})
+	defer func() { listIn = orig }()
+
+	removed, err := pruneIn(blocker, 1)
+	if err == nil {
+		t.Fatal("expected error when stat fails with ENOTDIR")
+	}
+	if removed != nil {
+		t.Errorf("expected no removals on stat error, got %v", removed)
+	}
+}
+
+// TestPruneRemovedIDsExist verifies the contract that every ID returned in
+// `removed` really existed and is gone afterwards — the "IDs of the snapshots
+// it deleted" doc promise.
+func TestPruneRemovedIDsExist(t *testing.T) {
+	base := t.TempDir()
+	makeSnapshots(t, base, []string{"20200101-120000", "20200201-120000", "20200301-120000", "20200401-120000"})
+
+	removed, err := pruneIn(base, 1)
+	if err != nil {
+		t.Fatalf("pruneIn: %v", err)
+	}
+	if len(removed) != 3 {
+		t.Fatalf("expected 3 removed, got %v", removed)
+	}
+	for _, id := range removed {
+		if _, err := os.Stat(filepath.Join(base, id)); !os.IsNotExist(err) {
+			t.Errorf("id %q returned as removed but stat says it still exists", id)
+		}
+	}
+}
