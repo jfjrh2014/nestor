@@ -21,21 +21,34 @@ var doctorCmd = &cobra.Command{
 	Short: "Health check for your nestor environment",
 	Long: `Checks that your nestor environment is healthy:
 config valid, packages installed, dotfiles present,
-secrets provider available. Like 'brew doctor' for everything.`,
+secrets provider available. Like 'brew doctor' for everything.
+Use --profile to check against a named profile's packages and
+dotfiles (mirrors 'nestor up --profile', as 'nestor diff' does).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runDoctor(cmd.Context())
 	},
 }
 
+var doctorProfileFlag string
+
 func init() {
+	doctorCmd.Flags().StringVarP(&doctorProfileFlag, "profile", "p", "", "check against a named profile (extra packages/dotfiles)")
 	rootCmd.AddCommand(doctorCmd)
 }
 
 func runDoctor(ctx context.Context) error {
-	return runDoctorOut(ctx, os.Stdout)
+	profileName, _ := ctx.Value(profileKey{}).(string)
+	if profileName == "" {
+		profileName = doctorProfileFlag
+	}
+	return runDoctorProfileOut(ctx, profileName, os.Stdout)
 }
 
 func runDoctorOut(ctx context.Context, w io.Writer) error {
+	return runDoctorProfileOut(ctx, "", w)
+}
+
+func runDoctorProfileOut(ctx context.Context, profileName string, w io.Writer) error {
 	p := ui.New(w)
 	issues := 0
 
@@ -48,6 +61,12 @@ func runDoctorOut(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("cannot proceed without valid config")
 	}
 	p.OK(fmt.Sprintf("valid config at %s", path))
+	if profileName != "" {
+		if !cfg.ValidProfile(profileName) {
+			return fmt.Errorf("unknown profile: %s", profileName)
+		}
+		p.OK(fmt.Sprintf("profile: %s", profileName))
+	}
 
 	// 2. Platform
 	p.Header("platform")
@@ -74,6 +93,9 @@ func runDoctorOut(ctx context.Context, w io.Writer) error {
 			"linux": cfg.Packages.Linux,
 			"wsl":   cfg.Packages.WSL,
 		},
+	}
+	if profileName != "" {
+		resolver.Common = append(resolver.Common, cfg.ProfilePackages(profileName)...)
 	}
 	var specs []packages.Spec
 	if platErr == nil {
@@ -111,8 +133,12 @@ func runDoctorOut(ctx context.Context, w io.Writer) error {
 	}
 
 	// 4. Dotfiles
+	templates := cfg.Dotfiles.Templates
+	if profileName != "" {
+		templates = append(templates, cfg.ProfileDotfiles(profileName)...)
+	}
 	p.Header("dotfiles")
-	if len(cfg.Dotfiles.Templates) == 0 {
+	if len(templates) == 0 {
 		p.Info("no dotfiles declared")
 	} else {
 		strategy := dotfiles.Strategy(cfg.Dotfiles.Strategy)
@@ -133,7 +159,7 @@ func runDoctorOut(ctx context.Context, w io.Writer) error {
 		}
 
 		present, drifted, absent := 0, 0, 0
-		for _, t := range cfg.Dotfiles.Templates {
+		for _, t := range templates {
 			deployer := dotfiles.Deployer{Strategy: strategy, Source: source}
 			status := deployer.Check(t.Src, t.Dest)
 			switch status {

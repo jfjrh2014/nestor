@@ -126,3 +126,126 @@ dotfiles:
 		t.Fatalf("expected 'missing: nonexistent-pkg-xyz-12345' in output, got:\n%s", out)
 	}
 }
+
+func TestDoctorProfilePackageMissingInBaseOne(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	// vim exists on the host (test-data lesson from #59), so base doctor
+	// must NOT report it missing, and work profile doctor must track it.
+	if err := os.WriteFile(cfgPath, []byte(`version: 1
+packages:
+  common:
+    - curl
+  work:
+    - vim
+dotfiles:
+  source: `+filepath.Join(dir, "dotfiles")+`
+  strategy: copy
+  templates: []
+profiles:
+  work:
+    packages: [vim]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "dotfiles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	// Base run: "missing: vim" would be the #59 bug resurfacing.
+	baseOut := &bytes.Buffer{}
+	if err := runDoctorProfileOut(context.Background(), "", baseOut); err != nil {
+		t.Fatalf("base doctor: %v", err)
+	}
+	if strings.Contains(baseOut.String(), "missing: vim") {
+		t.Fatalf("base doctor reported profile package vim as missing (profile-blindness):\n%s", baseOut.String())
+	}
+
+	// Profile run: vim is tracked, must be checked (and installed on this host).
+	profOut := &bytes.Buffer{}
+	if err := runDoctorProfileOut(context.Background(), "work", profOut); err != nil {
+		t.Fatalf("profile doctor: %v", err)
+	}
+	if !strings.Contains(profOut.String(), "profile: work") {
+		t.Fatalf("expected 'profile: work' in output, got:\n%s", profOut.String())
+	}
+	if strings.Contains(profOut.String(), "missing: vim") {
+		t.Fatalf("profile doctor reported vim missing although it is installed:\n%s", profOut.String())
+	}
+	// curl + vim = 2: proves the profile package joined the checked set.
+	if !strings.Contains(profOut.String(), "all 2 packages installed") {
+		t.Fatalf("expected 'all 2 packages installed' (curl + vim) in profile run, got:\n%s", profOut.String())
+	}
+}
+
+func TestDoctorUnknownProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	if err := os.WriteFile(cfgPath, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	out := &bytes.Buffer{}
+	err := runDoctorProfileOut(context.Background(), "nope", out)
+	if err == nil || !strings.Contains(err.Error(), "unknown profile: nope") {
+		t.Fatalf("expected 'unknown profile: nope' error, got: %v", err)
+	}
+}
+
+func TestDoctorProfileDotfilesChecked(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "dotfiles")
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	home, _ := os.UserHomeDir()
+	dest := filepath.Join(home, ".nestor-doctor-profile-test")
+	os.Remove(dest)
+	t.Cleanup(func() { os.Remove(dest) })
+
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := filepath.Join(srcDir, "work-zshrc.tmpl")
+	if err := os.WriteFile(tmpl, []byte("export WORK=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`version: 1
+dotfiles:
+  source: `+srcDir+`
+  strategy: copy
+  templates: []
+profiles:
+  work:
+    dotfiles:
+      - src: work-zshrc.tmpl
+        dest: `+dest+`
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	// Not deployed anywhere: base run sees zero dotfiles ("no dotfiles
+	// declared"), profile run must flag the profile template as absent.
+	baseOut := &bytes.Buffer{}
+	if err := runDoctorProfileOut(context.Background(), "", baseOut); err != nil {
+		t.Fatalf("base doctor: %v", err)
+	}
+	if !strings.Contains(baseOut.String(), "no dotfiles declared") {
+		t.Fatalf("expected base run to skip dotfiles, got:\n%s", baseOut.String())
+	}
+
+	profOut := &bytes.Buffer{}
+	if err := runDoctorProfileOut(context.Background(), "work", profOut); err != nil {
+		t.Fatalf("profile doctor: %v", err)
+	}
+	if !strings.Contains(profOut.String(), "not deployed: "+dest) {
+		t.Fatalf("expected profile dotfile absent warning, got:\n%s", profOut.String())
+	}
+}

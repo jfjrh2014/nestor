@@ -94,7 +94,7 @@ profiles:
 | `nestor sync` | Capture current machine state into config |
 | `nestor list` | Show all managed items with install status |
 | `nestor add [package\|dotfile\|secret] <name>` | Interactively add to config |
-| `nestor doctor` | Health check: packages, dotfiles, secrets, provider |
+| `nestor doctor` | Health check: packages, dotfiles, secrets, provider (`--profile` checks a profile layer) |
 | `nestor edit <template-src>` | Edit a template in `$EDITOR`, preview rendered output |
 | `nestor secrets inject` | Resolve and inject secrets into dotfiles |
 | `nestor secrets check` | Dry-run: verify provider reachable, every key resolves |
