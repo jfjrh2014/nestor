@@ -800,3 +800,13 @@ profiles:
 - Full gate round 2: one more lesson — the first test draft stubbed listIn and then asserted remaining state THROUGH the stub, which returned fixture fiction instead of disk; tests now un-stub before asserting disk state, and the phantom list was rebuilt newest-first (the first version was oldest-first, testing nothing).
 - 333 tests pass (13/13 packages). gofmt, vet, staticcheck clean. CGO_ENABLED=0 build clean. Pushed (commit 7d3f154).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+
+### 2026-08-29 — Daily dev session #62 — profile-aware doctor
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`). Bug-hunt session.
+- Found the #59 bug alive and well one command over: `doctor` was profile-blind — `up --profile work` installs the profile layer, `diff --profile` compares it, but `doctor` checked only base config, so a work machine missing slack reported "all packages installed". Same profile-blindness family; doctor just wasn't reading its case file.
+- Fix mirrors #59 exactly: `--profile/-p` flag (ctx profileKey + flag fallback like diff), unknown profile = hard error, profile packages appended to the resolver's Common, profile dotfiles appended to the checked templates. `runDoctorProfileOut(ctx, profile, w)` added; `runDoctorOut` kept as a 2-arg wrapper for existing tests.
+- 3 new tests: base-vs-profile package regression (vim: absent from base check, present in profile check, installed = "all 2 packages installed"), unknown-profile error, profile-dotfile absent warning ("not deployed: ..." under profile, "no dotfiles declared" in base).
+- Two test-draft lessons: asserted a literal that wasn't in the output format (`packages:` vs the actual `== packages ==` header — the real contract is the "all 2 packages installed" count), and wrote the template file before mkdir'ing its dir.
+- 336 tests pass (13/13 packages), -race clean on cmd, gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit a7f28fa).
+- Next: v0.1 once `gh auth refresh -s workflow` lands. Profile-blindness audit across remaining commands: list/sync don't take profiles by design (list wants full inventory, sync captures the machine).
