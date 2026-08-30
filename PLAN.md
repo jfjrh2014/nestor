@@ -810,3 +810,13 @@ profiles:
 - Two test-draft lessons: asserted a literal that wasn't in the output format (`packages:` vs the actual `== packages ==` header — the real contract is the "all 2 packages installed" count), and wrote the template file before mkdir'ing its dir.
 - 336 tests pass (13/13 packages), -race clean on cmd, gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit a7f28fa).
 - Next: v0.1 once `gh auth refresh -s workflow` lands. Profile-blindness audit across remaining commands: list/sync don't take profiles by design (list wants full inventory, sync captures the machine).
+
+### 2026-08-30 — Daily dev session #63 — profile-aware secrets
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`). Bug-hunt session.
+- Third location of the profile-blindness family (#59 diff, #62 doctor): `secrets inject`/`check` read only base mappings, while `up --profile` injects profile secret mappings. A work machine's profile-only secrets were invisible to the dry run, and base-empty + profile-secrets configs were told "no secrets declared."
+- Fix mirrors #59/#62: `--profile/-p` on both subcommands (ctx profileKey + flag fallback), `effectiveSecretMappings` layers profile `SecretMappings` after base (same resolution order as up), unknown profile = hard error. Profile line: `profile work: N extra secrets`. Per-#34/#35/#36, emptiness is keyed on mapping count — a profile with no secrets leaves the base set untouched, an unknown one errors.
+- 5 new tests: base-vs-profile key visibility (regression), profile-only secrets not hidden, inject round-trip writes both targets to disk (contents asserted), unknown-profile error on both commands, `TestEffectiveSecretMappings` resolution table.
+- Two test-draft lessons: forgot inject writes a trailing newline after the last line (existing TestSecretsInjectCreatesFile pins that contract), and the first draft referenced `config.SecretsConfig` — the type is `config.Secrets`.
+- 341 tests pass (13/13 packages). gofmt, vet, staticcheck clean. CGO_ENABLED=0 build clean. Race clean on cmd + internal/secrets. Pushed (commit db3e2e3).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
