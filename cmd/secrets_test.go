@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jfjrh2014/nestor/internal/config"
 )
 
 func TestSecretsCheckNoSecrets(t *testing.T) {
@@ -262,5 +264,212 @@ func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// runSecretsCheckProfileForTest points configPath at cfgPath and runs
+// runSecretsCheckProfileOut with the given profile. Pattern mirrors
+// runDiffForTest (session #59) and runDoctorProfileOut (session #62).
+func runSecretsCheckProfileForTest(t *testing.T, cfgPath, profile string) (string, error) {
+	t.Helper()
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	out := &bytes.Buffer{}
+	err := runSecretsCheckProfileOut(context.Background(), profile, out)
+	return out.String(), err
+}
+
+func runSecretsInjectProfileForTest(t *testing.T, cfgPath, profile string) (string, error) {
+	t.Helper()
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	out := &bytes.Buffer{}
+	err := runSecretsInjectProfileOut(context.Background(), profile, out)
+	return out.String(), err
+}
+
+// TestSecretsCheckProfileExtraKeys is the session #63 regression:
+// 'nestor up --profile X' injects the profile's secret mappings (up.go
+// Step 5), but 'nestor secrets check' only ever read the base config, so
+// profile-only and profile-extra keys were invisible to the dry run.
+func TestSecretsCheckProfileExtraKeys(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeFile(t, cfgPath, `version: 1
+secrets:
+  provider: env
+  mappings:
+    - key: NESTOR_BASE_KEY
+      inject:
+        ~/.nestor-test: "base={{.NESTOR_BASE_KEY}}"
+profiles:
+  work:
+    secrets:
+      - key: NESTOR_PROFILE_KEY
+        inject:
+          ~/.nestor-work-test: "work={{.NESTOR_PROFILE_KEY}}"
+`)
+	t.Setenv("NESTOR_BASE_KEY", "b")
+	t.Setenv("NESTOR_PROFILE_KEY", "p")
+
+	// Base run: only the base key is checked; the profile key is invisible.
+	body, err := runSecretsCheckProfileForTest(t, cfgPath, "")
+	if err != nil {
+		t.Fatalf("base check: %v", err)
+	}
+	if !strings.Contains(body, "1 secret(s) resolved") {
+		t.Fatalf("base run should resolve exactly 1, got: %s", body)
+	}
+	if strings.Contains(body, "NESTOR_PROFILE_KEY") {
+		t.Fatalf("base run should not mention the profile key, got: %s", body)
+	}
+
+	// Profile run: both keys are checked.
+	body, err = runSecretsCheckProfileForTest(t, cfgPath, "work")
+	if err != nil {
+		t.Fatalf("profile check: %v", err)
+	}
+	if !strings.Contains(body, "profile work: 1 extra secrets") {
+		t.Fatalf("expected profile line, got: %s", body)
+	}
+	if !strings.Contains(body, "2 secret(s) resolved") {
+		t.Fatalf("profile run should resolve 2, got: %s", body)
+	}
+	if !strings.Contains(body, "NESTOR_PROFILE_KEY reachable") {
+		t.Fatalf("profile key should be checked, got: %s", body)
+	}
+}
+
+// TestSecretsCheckProfileOnlyKeyingOnCount: base config with no secrets at
+// all plus a profile that declares them — "no secrets declared" would be a
+// lie for a work machine. Mirrors the #34/#35/#36 empty-provider lesson:
+// map counts decide, nothing else.
+func TestSecretsCheckProfileOnlySecrets(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeFile(t, cfgPath, `version: 1
+profiles:
+  work:
+    secrets:
+      - key: NESTOR_PROFILE_ONLY
+        inject:
+          ~/.nestor-test: "v={{.NESTOR_PROFILE_ONLY}}"
+`)
+	t.Setenv("NESTOR_PROFILE_ONLY", "yes")
+
+	body, err := runSecretsCheckProfileForTest(t, cfgPath, "work")
+	if err != nil {
+		t.Fatalf("profile check: %v", err)
+	}
+	if strings.Contains(body, "no secrets declared") {
+		t.Fatalf("profile secrets must not be hidden, got: %s", body)
+	}
+	if !strings.Contains(body, "1 secret(s) resolved") {
+		t.Fatalf("expected 1 resolved, got: %s", body)
+	}
+}
+
+// TestSecretsInjectProfileWritesProfileTarget proves the profile layer is
+// actually injected to disk, not just counted.
+func TestSecretsInjectProfileWritesProfileTarget(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeFile(t, cfgPath, `version: 1
+secrets:
+  provider: env
+  mappings:
+    - key: NESTOR_INJ_BASE
+      inject:
+        `+dir+`/base.txt: "base={{.NESTOR_INJ_BASE}}"
+profiles:
+  work:
+    secrets:
+      - key: NESTOR_INJ_WORK
+        inject:
+          `+dir+`/work.txt: "work={{.NESTOR_INJ_WORK}}"
+`)
+	t.Setenv("NESTOR_INJ_BASE", "B")
+	t.Setenv("NESTOR_INJ_WORK", "W")
+
+	body, err := runSecretsInjectProfileForTest(t, cfgPath, "work")
+	if err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if !strings.Contains(body, "resolving 2 secrets") {
+		t.Fatalf("expected 2 secrets resolved, got: %s", body)
+	}
+	if !strings.Contains(body, "2 secrets injected") {
+		t.Fatalf("expected 2 injected, got: %s", body)
+	}
+	base, baseErr := os.ReadFile(filepath.Join(dir, "base.txt"))
+	work, workErr := os.ReadFile(filepath.Join(dir, "work.txt"))
+	if baseErr != nil || workErr != nil {
+		t.Fatalf("both targets must exist: base=%v work=%v", baseErr, workErr)
+	}
+	if string(base) != "base=B\n" || string(work) != "work=W\n" {
+		t.Fatalf("wrong contents: base=%q work=%q", base, work)
+	}
+}
+
+// TestSecretsCheckUnknownProfile: like diff (#59) and doctor (#62), an
+// unknown profile is a hard error, not a silent base-only run.
+func TestSecretsCheckUnknownProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeFile(t, cfgPath, "version: 1\n")
+
+	_, err := runSecretsCheckProfileForTest(t, cfgPath, "nope")
+	if err == nil || !strings.Contains(err.Error(), "unknown profile: nope") {
+		t.Fatalf("expected unknown profile error, got: %v", err)
+	}
+
+	_, err = runSecretsInjectProfileForTest(t, cfgPath, "nope")
+	if err == nil || !strings.Contains(err.Error(), "unknown profile: nope") {
+		t.Fatalf("expected unknown profile error from inject, got: %v", err)
+	}
+}
+
+// TestEffectiveSecretMappings locks the resolution table in one place.
+func TestEffectiveSecretMappings(t *testing.T) {
+	base := []config.Mapping{{Key: "b"}}
+	prof := []config.Mapping{{Key: "p"}}
+
+	cases := []struct {
+		name      string
+		cfg       *config.Config
+		profile   string
+		wantLen   int
+		wantExtra int
+		wantErr   bool
+	}{
+		{"no profile", &config.Config{Secrets: config.Secrets{Mappings: base}}, "", 1, 0, false},
+		{"profile layers", &config.Config{
+			Secrets:  config.Secrets{Mappings: base},
+			Profiles: map[string]config.Profile{"work": {SecretMappings: prof}},
+		}, "work", 2, 1, false},
+		{"profile empty stays base", &config.Config{
+			Secrets:  config.Secrets{Mappings: base},
+			Profiles: map[string]config.Profile{"work": {}},
+		}, "work", 1, 0, false},
+		{"unknown profile", &config.Config{}, "ghost", 0, 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, extra, err := effectiveSecretMappings(tc.cfg, tc.profile)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != tc.wantLen || len(extra) != tc.wantExtra {
+				t.Fatalf("got %d mappings (%d extra), want %d (%d extra)", len(got), len(extra), tc.wantLen, tc.wantExtra)
+			}
+		})
 	}
 }

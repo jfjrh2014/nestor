@@ -96,8 +96,8 @@ profiles:
 | `nestor add [package\|dotfile\|secret] <name>` | Interactively add to config |
 | `nestor doctor` | Health check: packages, dotfiles, secrets, provider (`--profile` checks a profile layer) |
 | `nestor edit <template-src>` | Edit a template in `$EDITOR`, preview rendered output |
-| `nestor secrets inject` | Resolve and inject secrets into dotfiles |
-| `nestor secrets check` | Dry-run: verify provider reachable, every key resolves |
+| `nestor secrets inject` | Resolve and inject secrets into dotfiles (`--profile` layers a profile's extra secrets, mirrors `up`) |
+| `nestor secrets check` | Dry-run: verify provider reachable, every key resolves (`--profile` to check the profile layer too) |
 | `nestor profiles` | List all config profiles with package counts |
 | `nestor rollback [snapshot-id]` | Restore dotfiles from a snapshot |
 | `nestor snapshots` | List available dotfile snapshots |
