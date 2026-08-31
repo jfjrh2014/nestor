@@ -820,3 +820,13 @@ profiles:
 - Two test-draft lessons: forgot inject writes a trailing newline after the last line (existing TestSecretsInjectCreatesFile pins that contract), and the first draft referenced `config.SecretsConfig` — the type is `config.Secrets`.
 - 341 tests pass (13/13 packages). gofmt, vet, staticcheck clean. CGO_ENABLED=0 build clean. Race clean on cmd + internal/secrets. Pushed (commit db3e2e3).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+
+### 2026-08-31 — Daily dev session #64 — profile-aware `nestor ci`
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`). Bug-hunt session.
+- Fourth location of the profile-blindness family (#59 diff, #62 doctor, #63 secrets): `nestor ci` validated profile packages (manager-prefix warnings) but ran profile dotfiles and secrets through almost nothing. `up --profile work` would deploy a profile template with an empty dest, a broken src, or two profile templates fighting over one dest — and `ci` said the config was fine. Profile secret mappings needed no provider at all (base did), and empty-key/no-inject mappings in a profile were invisible.
+- Fix: extract `templateFindings`/`mappingFindings` helpers used by both the base validators and `validateProfiles` (now takes dotfilesSource for src-existence). Profile gaps covered: empty src/dest, same-layer duplicate dests, src-not-found, provider-less profile mappings, empty keys, no inject targets, fully-empty profile warning reworded (a dotfile- or secrets-only profile is not "no packages").
+- One design call the first test draft caught: base→profile dest sharing is a deliberate override (up deploys profile after base; snapshotDestPaths already dedups for it), so it warns instead of erroring — a straight reuse of the base duplicate-dest error would have made every override config fail `ci`. Same-layer collides stay errors.
+- 6 new tests (13 subtests): empty fields, same-layer duplicate, override-warns-not-errors (asserts the warning fires), src existence, provider-less mappings, empty key, no inject targets.
+- Full gate: 347 test functions across 13/13 packages, -race clean on ci+cmd, gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit 711529e).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
