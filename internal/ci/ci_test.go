@@ -3,6 +3,7 @@ package ci
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jfjrh2014/nestor/internal/config"
@@ -281,4 +282,161 @@ func stringContains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestValidateProfilesDotfiles(t *testing.T) {
+	t.Run("profile empty fields flagged", func(t *testing.T) {
+		cfg := &config.Config{
+			Version: 1,
+			Profiles: map[string]config.Profile{
+				"work": {Dotfiles: []config.Template{
+					{Src: "", Dest: "~/.zshrc"},
+					{Src: "f.tmpl", Dest: ""},
+				}},
+			},
+		}
+		r := Validate(cfg, "")
+		found := 0
+		for _, f := range r.Findings {
+			if f.Category == "profile work" && strings.Contains(f.Message, "empty") {
+				found++
+			}
+		}
+		if found < 2 {
+			t.Errorf("expected 2 empty-field findings, got %d: %+v", found, r.Findings)
+		}
+	})
+
+	t.Run("profile duplicate dest among profile templates errors", func(t *testing.T) {
+		cfg := &config.Config{
+			Version: 1,
+			Profiles: map[string]config.Profile{
+				"work": {Dotfiles: []config.Template{
+					{Src: "a.tmpl", Dest: "~/.gitconfig"},
+					{Src: "b.tmpl", Dest: "~/.gitconfig"},
+				}},
+			},
+		}
+		r := Validate(cfg, "")
+		found := false
+		for _, f := range r.Findings {
+			if f.Category == "profile work" && f.Severity == SeverityError && strings.Contains(f.Message, "duplicate dest") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected duplicate dest error, got: %+v", r.Findings)
+		}
+	})
+
+	t.Run("profile dest overriding base warns not errors", func(t *testing.T) {
+		cfg := &config.Config{
+			Version: 1,
+			Dotfiles: config.Dotfiles{
+				Templates: []config.Template{{Src: "git.tmpl", Dest: "~/.gitconfig"}},
+			},
+			Profiles: map[string]config.Profile{
+				"work": {Dotfiles: []config.Template{
+					{Src: "git-work.tmpl", Dest: "~/.gitconfig"},
+				}},
+			},
+		}
+		r := Validate(cfg, "")
+		sawWarn := false
+		for _, f := range r.Findings {
+			if f.Category == "profile work" && strings.Contains(f.Message, "~/.gitconfig") {
+				if f.Severity == SeverityError {
+					t.Errorf("base+profile dest share must warn, not error: %+v", r.Findings)
+				}
+				if f.Severity == SeverityWarning && strings.Contains(f.Message, "overrides") {
+					sawWarn = true
+				}
+			}
+		}
+		if !sawWarn {
+			t.Errorf("expected override warning for ~/.gitconfig, got: %+v", r.Findings)
+		}
+	})
+
+	t.Run("profile src existence checked when source given", func(t *testing.T) {
+		cfg := &config.Config{
+			Version: 1,
+			Profiles: map[string]config.Profile{
+				"work": {Dotfiles: []config.Template{
+					{Src: "missing.tmpl", Dest: "~/.zshrc"},
+				}},
+			},
+		}
+		r := Validate(cfg, t.TempDir()) // empty dir: src will not exist
+		found := false
+		for _, f := range r.Findings {
+			if f.Category == "profile work" && f.Severity == SeverityWarning && strings.Contains(f.Message, "missing.tmpl") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected src-not-found warning, got: %+v", r.Findings)
+		}
+	})
+}
+
+func TestValidateProfilesSecrets(t *testing.T) {
+	t.Run("profile mappings with no provider error", func(t *testing.T) {
+		cfg := &config.Config{
+			Version: 1,
+			Profiles: map[string]config.Profile{
+				"work": {SecretMappings: []config.Mapping{{Key: "API_KEY", Inject: map[string]string{"HOME": "~/.env"}}}},
+			},
+		}
+		r := Validate(cfg, "")
+		found := false
+		for _, f := range r.Findings {
+			if f.Category == "profile work" && f.Severity == SeverityError && strings.Contains(f.Message, "no provider set") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected no-provider error for profile mappings, got: %+v", r.Findings)
+		}
+	})
+
+	t.Run("profile mapping empty key flagged", func(t *testing.T) {
+		cfg := &config.Config{
+			Version: 1,
+			Secrets: config.Secrets{Provider: "env"},
+			Profiles: map[string]config.Profile{
+				"work": {SecretMappings: []config.Mapping{{Key: "", Inject: map[string]string{"HOME": "~/.env"}}}},
+			},
+		}
+		r := Validate(cfg, "")
+		found := false
+		for _, f := range r.Findings {
+			if f.Category == "profile work" && f.Severity == SeverityError && strings.Contains(f.Message, "empty key") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected empty-key error, got: %+v", r.Findings)
+		}
+	})
+
+	t.Run("profile mapping no inject targets warns", func(t *testing.T) {
+		cfg := &config.Config{
+			Version: 1,
+			Secrets: config.Secrets{Provider: "env"},
+			Profiles: map[string]config.Profile{
+				"work": {SecretMappings: []config.Mapping{{Key: "API_KEY", Inject: map[string]string{}}}},
+			},
+		}
+		r := Validate(cfg, "")
+		found := false
+		for _, f := range r.Findings {
+			if f.Category == "profile work" && f.Severity == SeverityWarning && strings.Contains(f.Message, "no inject targets") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected no-inject-targets warning, got: %+v", r.Findings)
+		}
+	})
 }

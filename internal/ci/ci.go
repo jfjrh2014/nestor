@@ -84,7 +84,7 @@ func Validate(cfg *config.Config, dotfilesSource string) Report {
 	findings = append(findings, validatePackages(cfg)...)
 	findings = append(findings, validateDotfiles(cfg, dotfilesSource)...)
 	findings = append(findings, validateSecrets(cfg)...)
-	findings = append(findings, validateProfiles(cfg)...)
+	findings = append(findings, validateProfiles(cfg, dotfilesSource)...)
 
 	return Report{
 		Findings: findings,
@@ -269,16 +269,94 @@ func validateSecrets(cfg *config.Config) []Finding {
 	return out
 }
 
-func validateProfiles(cfg *config.Config) []Finding {
+// templateFindings checks one template list: empty src/dest and duplicate
+// dests, plus src existence when source is non-empty. prefix names the
+// section in messages (e.g. "dotfiles", "profile work"). destSeen accumulates
+// across calls so profile templates can be checked against base dests.
+func templateFindings(prefix string, tmpl []config.Template, source string, destSeen map[string]bool) []Finding {
+	var out []Finding
+	layerSeen := map[string]bool{}
+	for _, t := range tmpl {
+		switch {
+		case t.Dest == "":
+			out = append(out, Finding{SeverityError, prefix, "template with empty dest path"})
+			continue
+		case t.Src == "":
+			out = append(out, Finding{SeverityError, prefix, fmt.Sprintf("template dest %q has empty src", t.Dest)})
+			continue
+		}
+		if layerSeen[t.Dest] {
+			out = append(out, Finding{SeverityError, prefix, fmt.Sprintf("duplicate dest path %q", t.Dest)})
+		} else if destSeen[t.Dest] {
+			out = append(out, Finding{SeverityWarning, prefix, fmt.Sprintf("dest %q overrides a template from an earlier layer", t.Dest)})
+		}
+		layerSeen[t.Dest] = true
+		destSeen[t.Dest] = true
+
+		if source != "" {
+			srcPath := t.Src
+			if !filepath.IsAbs(srcPath) {
+				srcPath = filepath.Join(source, srcPath)
+			}
+			if _, err := os.Stat(srcPath); err != nil {
+				out = append(out, Finding{
+					SeverityWarning,
+					prefix,
+					fmt.Sprintf("template src %q not found (%v)", t.Src, osErrText(err)),
+				})
+			}
+		}
+	}
+	return out
+}
+
+// mappingFindings checks one secret-mapping list: empty keys and inject-less
+// mappings. prefix names the section in messages (e.g. "secrets", "profile work").
+func mappingFindings(prefix string, mappings []config.Mapping) []Finding {
+	var out []Finding
+	for i, m := range mappings {
+		if m.Key == "" {
+			out = append(out, Finding{SeverityError, prefix, fmt.Sprintf("mapping #%d has empty key", i+1)})
+			continue
+		}
+		if len(m.Inject) == 0 {
+			out = append(out, Finding{SeverityWarning, prefix, fmt.Sprintf("secret %q has no inject targets", m.Key)})
+		}
+	}
+	return out
+}
+
+func validateProfiles(cfg *config.Config, dotfilesSource string) []Finding {
 	var out []Finding
 
 	for name, prof := range cfg.Profiles {
 		if name == "" {
 			out = append(out, Finding{SeverityError, "profiles", "profile with empty name"})
 		}
-		if len(prof.Packages) == 0 {
-			out = append(out, Finding{SeverityWarning, "profiles", fmt.Sprintf("profile %q has no packages", name)})
+		if len(prof.Packages) == 0 && len(prof.Dotfiles) == 0 && len(prof.SecretMappings) == 0 {
+			out = append(out, Finding{SeverityWarning, "profiles", fmt.Sprintf("profile %q declares no packages, dotfiles, or secrets", name)})
 		}
+
+		prefix := "profile " + name
+
+		// Profile dotfiles get the same field/syntax checks as base templates.
+		// destSeen starts from base dests: a profile dest shared with base is a
+		// deliberate override (up deploys profile after base) and only warns;
+		// two templates of the same layer colliding is an error, as in base.
+		destSeen := map[string]bool{}
+		for _, t := range cfg.Dotfiles.Templates {
+			if t.Dest != "" {
+				destSeen[t.Dest] = true
+			}
+		}
+		out = append(out, templateFindings(prefix, prof.Dotfiles, dotfilesSource, destSeen)...)
+
+		// Profile secrets get the same per-mapping checks as base; they also
+		// need a provider, which the base branch only guards for base mappings.
+		if cfg.Secrets.Provider == "" && len(prof.SecretMappings) > 0 {
+			out = append(out, Finding{SeverityError, prefix, fmt.Sprintf("%d secret mappings but no provider set", len(prof.SecretMappings))})
+		}
+		out = append(out, mappingFindings(prefix, prof.SecretMappings)...)
 	}
 
 	return out
