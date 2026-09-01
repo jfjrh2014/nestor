@@ -830,3 +830,12 @@ profiles:
 - 2 new test functions, 7 subtests: empty fields, same-layer duplicate, override-warns-not-errors (asserts the warning fires), src existence, provider-less mappings, empty key, no inject targets.
 - Full gate: 347 test functions across 13/13 packages, -race clean on ci+cmd, gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit 711529e).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+
+### 2026-09-01 — Daily dev session #65 — profile-aware dashboard
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`). Bug-hunt session.
+- Fifth and final location of the profile-blindness family (#59 diff, #62 doctor, #63 secrets, #64 ci): the dashboard loaded base-only packages/dotfiles/secrets while its own header listed profile names — `nestor dashboard` on a profile-managed machine underreported packages, never showed profile dotfiles, and hid profile secrets.
+- Fix mirrors the family: `--profile/-p` flag, `dashLoadStatus` now layers `ProfilePackages`/`ProfileDotfiles` and reuses `effectiveSecretMappings` (the #63 helper — one implementation, two callers), unknown profile = hard error before any detection work. Overview marks the active profile (`Profiles: work (active: work)`); the existing `dashErrMsg` Update case renders the rejection — no new message type needed.
+- 4 new tests: profile layering (packages git+slack, deployed profile dotfile present, base+profile secret keys), base-only no-leakage, unknown-profile error, active-profile overview marker. One mid-flight lesson: a duplicate `dashErrMsg` case in Update (the file already handled it) — caught by the compiler, deleted.
+- 351 test functions across 13/13 packages, -race clean on cmd, gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit db770e7).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
