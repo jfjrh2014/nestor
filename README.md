@@ -101,7 +101,7 @@ profiles:
 | `nestor profiles` | List all config profiles with package counts |
 | `nestor rollback [snapshot-id]` | Restore dotfiles from a snapshot |
 | `nestor snapshots` | List available dotfile snapshots |
-| `nestor dashboard` | Interactive TUI: packages, dotfiles, secrets at a glance |
+| `nestor dashboard` | Interactive TUI: packages, dotfiles, secrets at a glance (`--profile` views a profile layer) |
 | `nestor ci [--quiet]` | Validate config statically; exits non-zero on errors |
 | `nestor restore --from <url> [--force] [-o <path>]` | Pull a nestor.yml from a remote URL |
 | `nestor import [chezmoi\|yadm\|brewfile] [--dry-run]` | Import from existing tools, auto-detect if none given |

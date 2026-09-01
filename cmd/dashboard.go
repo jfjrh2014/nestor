@@ -65,6 +65,7 @@ var dashTabNames = []string{"Overview", "Packages", "Dotfiles", "Secrets"}
 
 type dashboardModel struct {
 	cfg       *config.Config
+	profile   string
 	cursor    int
 	activeTab dashTab
 	width     int
@@ -110,8 +111,18 @@ func (e dashErrMsg) Error() string { return e.err.Error() }
 
 // --- commands ---
 
-func dashLoadStatus(cfg *config.Config) tea.Cmd {
+// dashLoadStatus collects live machine status for the config, optionally
+// layered with a named profile exactly as 'nestor up --profile' deploys it —
+// otherwise a dashboard on a profile-managed machine underreported packages,
+// missed profile dotfiles, and hid profile secrets while its own header
+// listed the profiles (session #65; family: diff #59, doctor #62, secrets
+// #63, ci #64).
+func dashLoadStatus(cfg *config.Config, profileName string) tea.Cmd {
 	return func() tea.Msg {
+		if profileName != "" && !cfg.ValidProfile(profileName) {
+			return dashErrMsg{fmt.Errorf("unknown profile: %s", profileName)}
+		}
+
 		plat, err := platform.Detect()
 		if err != nil {
 			return dashErrMsg{err}
@@ -126,6 +137,7 @@ func dashLoadStatus(cfg *config.Config) tea.Cmd {
 			},
 		}
 		resolved := resolver.Resolve(plat.OS)
+		resolved = append(resolved, cfg.ProfilePackages(profileName)...)
 
 		specs := make([]packages.Spec, 0, len(resolved))
 		for _, raw := range resolved {
@@ -163,8 +175,11 @@ func dashLoadStatus(cfg *config.Config) tea.Cmd {
 			Source:   sourceDir,
 		}
 
+		templates := cfg.Dotfiles.Templates
+		templates = append(templates, cfg.ProfileDotfiles(profileName)...)
+
 		var dotStatuses []dashDotfileStatus
-		for _, t := range cfg.Dotfiles.Templates {
+		for _, t := range templates {
 			present := false
 			drift := false
 			switch deployer.Check(t.Src, t.Dest) {
@@ -184,8 +199,13 @@ func dashLoadStatus(cfg *config.Config) tea.Cmd {
 			})
 		}
 
+		secMappings, _, err := effectiveSecretMappings(cfg, profileName)
+		if err != nil {
+			return dashErrMsg{err}
+		}
+
 		var secStatuses []dashSecretStatus
-		for _, m := range cfg.Secrets.Mappings {
+		for _, m := range secMappings {
 			secStatuses = append(secStatuses, dashSecretStatus{mapping: m})
 		}
 
@@ -203,7 +223,7 @@ func dashLoadStatus(cfg *config.Config) tea.Cmd {
 // --- bubbletea boilerplate ---
 
 func (m dashboardModel) Init() tea.Cmd {
-	return dashLoadStatus(m.cfg)
+	return dashLoadStatus(m.cfg, m.profile)
 }
 
 func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -364,9 +384,15 @@ func (m dashboardModel) renderOverview() string {
 		len(m.secretStatuses),
 		dashSubtleStyle.Render(dashSecretsProvider(m.cfg))))
 
-	if len(dashProfiles(m.cfg)) > 0 {
-		b.WriteString(fmt.Sprintf("  Profiles:  %s\n",
-			dashSubtleStyle.Render(strings.Join(dashProfiles(m.cfg), ", "))))
+	if names := dashProfiles(m.cfg); len(names) > 0 {
+		if m.profile != "" {
+			b.WriteString(fmt.Sprintf("  Profiles:  %s (active: %s)\n",
+				dashSubtleStyle.Render(strings.Join(names, ", ")),
+				dashBoldStyle.Render(m.profile)))
+		} else {
+			b.WriteString(fmt.Sprintf("  Profiles:  %s\n",
+				dashSubtleStyle.Render(strings.Join(names, ", "))))
+		}
 	}
 
 	return b.String()
@@ -493,7 +519,9 @@ Navigation:
 				return err
 			}
 
-			m := dashboardModel{cfg: cfg}
+			profileName := dashProfileFlag
+
+			m := dashboardModel{cfg: cfg, profile: profileName}
 			p := tea.NewProgram(m, tea.WithAltScreen())
 			_, err = p.Run()
 			return err
@@ -503,6 +531,9 @@ Navigation:
 
 var dashboardCmd = newDashboardCmd()
 
+var dashProfileFlag string
+
 func init() {
+	dashboardCmd.Flags().StringVarP(&dashProfileFlag, "profile", "p", "", "view status for a named profile (extra packages/dotfiles/secrets)")
 	rootCmd.AddCommand(dashboardCmd)
 }

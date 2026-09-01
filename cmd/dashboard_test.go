@@ -218,6 +218,7 @@ func dashCheckStatusToFields(s dotfiles.CheckStatus) (present, drift bool) {
 // would produce, so View/render/Update tests don't need a terminal.
 func newLoadedModel() dashboardModel {
 	return dashboardModel{
+		profile: "work",
 		cfg: &config.Config{
 			Profiles: map[string]config.Profile{"work": {Packages: []string{"slack"}}},
 			Secrets:  config.Secrets{Provider: "vault", Mappings: []config.Mapping{{Key: "API_TOKEN"}}},
@@ -454,7 +455,7 @@ func TestDashLoadStatus(t *testing.T) {
 	t.Setenv("HOME", dir)
 
 	// empty config: load should succeed and return zero dotfiles/secrets
-	msg := dashLoadStatus(&config.Config{})()
+	msg := dashLoadStatus(&config.Config{}, "")()
 	if _, ok := msg.(dashStatusLoadedMsg); !ok {
 		t.Fatalf("expected dashStatusLoadedMsg, got %T", msg)
 	}
@@ -525,5 +526,134 @@ func TestListOutMissingConfig(t *testing.T) {
 	var out bytes.Buffer
 	if err := runListOut(context.Background(), &out); err == nil {
 		t.Fatal("expected list error for missing config, got nil")
+	}
+}
+
+// --- session #65: profile-aware dashboard ---
+
+// TestDashLoadStatusProfileLayers verifies dashLoadStatus layers the named
+// profile's packages, dotfiles, and secrets onto the base config, exactly as
+// 'up --profile' would deploy them.
+func TestDashLoadStatusProfileLayers(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "workrc.tmpl"), []byte("export WORK=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-deploy the profile dotfile (copy strategy compares content).
+	if err := os.WriteFile(filepath.Join(dir, ".workrc"), []byte("export WORK=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Packages: config.Packages{Common: []string{"git"}},
+		Profiles: map[string]config.Profile{
+			"work": {
+				Packages:       []string{"slack"},
+				Dotfiles:       []config.Template{{Src: "workrc.tmpl", Dest: "~/.workrc"}},
+				SecretMappings: []config.Mapping{{Key: "WORK_TOKEN"}},
+			},
+		},
+		Dotfiles: config.Dotfiles{Source: srcDir, Strategy: "copy"},
+		Secrets:  config.Secrets{Mappings: []config.Mapping{{Key: "API_TOKEN"}}},
+	}
+
+	msg := dashLoadStatus(cfg, "work")()
+	loaded, ok := msg.(dashStatusLoadedMsg)
+	if !ok {
+		t.Fatalf("expected dashStatusLoadedMsg, got %T (%v)", msg, msg)
+	}
+
+	// packages: base + profile
+	names := map[string]int{}
+	for _, s := range loaded.pkgSpecs {
+		names[s.Name]++
+	}
+	if names["git"] != 1 || names["slack"] != 1 {
+		t.Errorf("expected base git and profile slack in specs, got %v", names)
+	}
+
+	// dotfiles: base has none, the profile's workrc must be checked and present
+	if len(loaded.dotfiles) != 1 {
+		t.Fatalf("expected 1 dotfile (profile layer), got %d", len(loaded.dotfiles))
+	}
+	if got := loaded.dotfiles[0].tmpl.Src; got != "workrc.tmpl" {
+		t.Errorf("expected profile template workrc.tmpl, got %q", got)
+	}
+	if !loaded.dotfiles[0].present {
+		t.Error("profile dotfile should read present (deployed, content matches)")
+	}
+
+	// secrets: base API_TOKEN + profile WORK_TOKEN
+	keys := map[string]bool{}
+	for _, s := range loaded.secrets {
+		keys[s.mapping.Key] = true
+	}
+	if !keys["API_TOKEN"] || !keys["WORK_TOKEN"] {
+		t.Errorf("expected base + profile secret keys, got %v", keys)
+	}
+}
+
+// TestDashLoadStatusBaseOnlyWithoutProfile verifies the no-profile call still
+// reports exactly the base config (no profile leakage into the default view).
+func TestDashLoadStatusBaseOnlyWithoutProfile(t *testing.T) {
+	cfg := &config.Config{
+		Packages: config.Packages{Common: []string{"git"}},
+		Profiles: map[string]config.Profile{
+			"work": {Packages: []string{"slack"}, SecretMappings: []config.Mapping{{Key: "WORK_TOKEN"}}},
+		},
+		Secrets: config.Secrets{Mappings: []config.Mapping{{Key: "API_TOKEN"}}},
+	}
+
+	msg := dashLoadStatus(cfg, "")()
+	loaded, ok := msg.(dashStatusLoadedMsg)
+	if !ok {
+		t.Fatalf("expected dashStatusLoadedMsg, got %T (%v)", msg, msg)
+	}
+	if len(loaded.pkgSpecs) != 1 || loaded.pkgSpecs[0].Name != "git" {
+		t.Errorf("base-only load should have exactly git, got %+v", loaded.pkgSpecs)
+	}
+	if len(loaded.secrets) != 1 || loaded.secrets[0].mapping.Key != "API_TOKEN" {
+		t.Errorf("base-only load should have exactly API_TOKEN, got %+v", loaded.secrets)
+	}
+	if len(loaded.dotfiles) != 0 {
+		t.Errorf("base-only load should have no dotfiles, got %d", len(loaded.dotfiles))
+	}
+}
+
+// TestDashLoadStatusUnknownProfileErrors verifies an unknown profile is
+// rejected up front (same contract as diff/doctor/secrets) instead of
+// silently rendering the base config.
+func TestDashLoadStatusUnknownProfileErrors(t *testing.T) {
+	msg := dashLoadStatus(&config.Config{}, "nope")()
+	errMsg, ok := msg.(dashErrMsg)
+	if !ok {
+		t.Fatalf("expected dashErrMsg, got %T (%v)", msg, msg)
+	}
+	if !strings.Contains(errMsg.Error(), "unknown profile: nope") {
+		t.Errorf("expected 'unknown profile: nope', got: %v", errMsg)
+	}
+}
+
+// TestDashboardOverviewActiveProfile verifies the overview marks the active
+// profile and still renders the plain list when none is active.
+func TestDashboardOverviewActiveProfile(t *testing.T) {
+	m := newLoadedModel()
+	v := m.View()
+	if !strings.Contains(v, "Profiles:") || !strings.Contains(v, "(active: work)") {
+		t.Errorf("overview should mark the active profile; output:\n%s", v)
+	}
+
+	m.profile = ""
+	v2 := m.View()
+	if strings.Contains(v2, "active:") {
+		t.Errorf("no active profile should mean no active marker; output:\n%s", v2)
+	}
+	if !strings.Contains(v2, "Profiles:") || !strings.Contains(v2, "work") {
+		t.Errorf("profile list should still render; output:\n%s", v2)
 	}
 }
