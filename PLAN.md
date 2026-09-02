@@ -839,3 +839,15 @@ profiles:
 - 4 new tests: profile layering (packages git+slack, deployed profile dotfile present, base+profile secret keys), base-only no-leakage, unknown-profile error, active-profile overview marker. One mid-flight lesson: a duplicate `dashErrMsg` case in Update (the file already handled it) — caught by the compiler, deleted.
 - 351 test functions across 13/13 packages, -race clean on cmd, gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit db770e7).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-02 — Daily dev session #66 — templates fail loudly on undefined keys
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`). Coverage-hunt session that turned into a real bug.
+- Verified with an isolated probe before touching anything: `renderTemplate` executed templates with nil data and no missingkey option, so `{{.GH_TOKEN}}` rendered the literal "<no value>" into the deployed dotfile, `diff` blessed it as present, and `edit` previewed it — silent corruption in every managed dotfile that used a field placeholder. (Secrets injection never had the bug: `injectOne` is string-based.)
+- Fix: `missingkey=error` in renderTemplate — the single choke point behind Deploy, Check, and Render. `{{env "X"}}` unaffected (verified), literals unaffected, `{{.}}` still renders its zero value.
+- Ripple the fix surfaced: TestEditPreviewRenderedOutput used `{{.name}}` — it was pinning the buggy semantics (asserting a preview of "<no value>" would have failed for years). Rewritten to supported syntax with a real render assertion. edit.go's error hint reworded: "syntax errors" → also covers missing keys.
+- `nestor ci` closed the loop: templateFindings now renders `.tmpl` srcs instead of only stat-ing them, so an undefined key is an error at validation time, not at first deploy. Existing src-not-found stays a warning (missing file might appear later; a broken template never will).
+- Bonus dedup: validateDotfiles' inline loop was a pre-#64 copy of templateFindings — base dotfiles had silently skipped the duplicate-dest check. Replaced with the helper call (base layer now also gets override warnings vs itself, which are none by construction).
+- New tests: deploy-undefined-key fails without creating dest, env-func unaffected (pins "<no value>" only for bare `{{.}}`), Check reports Drifted on render failure, Render errors with "no entry for key", ci renderable-passes/ci undefined-key-errors.
+- Three test-draft lessons this session: repeated the #62 mkdir-before-write slip in the Check test; first ci subtests passed "" as the source dir (tests skipped the check they asserted); the ci dedup left an orphaned `return out` that the build caught.
+- 355 test functions across 13/13 packages, -race clean, gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit db24e2d).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
