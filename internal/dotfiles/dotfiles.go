@@ -139,11 +139,16 @@ func (d Deployer) symlink(src, dest string, t Template) Result {
 // renderTemplate parses the file as a text/template and runs it with the
 // built-in function map (env, home). Variables are not provided by the caller
 // yet; Phase 2 will inject secret values.
+//
+// missingkey=error makes an undefined key fail the render instead of silently
+// emitting "<no value>" into the deployed dotfile. It does not affect func
+// calls like env or literals, only map/index lookups on missing entries.
 func renderTemplate(path string) ([]byte, error) {
 	tmpl, err := template.New(filepath.Base(path)).
 		Funcs(template.FuncMap{
 			"env": os.Getenv,
 		}).
+		Option("missingkey=error").
 		ParseFiles(path)
 	if err != nil {
 		return nil, err

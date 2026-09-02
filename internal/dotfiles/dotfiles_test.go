@@ -492,3 +492,87 @@ func TestCopyMkdirFailure(t *testing.T) {
 		t.Fatalf("expected mkdir-prefixed error, got %v", r.Err)
 	}
 }
+
+func TestDeployTemplateUndefinedKeyFailsNotNoValue(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "gitconfig.tmpl")
+	// {{.GH_TOKEN}} has no data source today; the old behavior rendered the
+	// literal "<no value>" into the deployed file instead of failing.
+	if err := os.WriteFile(src, []byte("token = {{.GH_TOKEN}}\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "out", ".gitconfig")
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "gitconfig.tmpl", Dest: dest})
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for undefined key, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "no entry for key") {
+		t.Fatalf("expected missing-key error, got %v", r.Err)
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("dest should not exist when rendering fails")
+	}
+}
+
+func TestDeployTemplateEnvFuncUnaffectedByMissingKeyOption(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "shellrc.tmpl")
+	t.Setenv("NESTOR_MK_TEST", "fine")
+	if err := os.WriteFile(src, []byte(`export X={{env "NESTOR_MK_TEST"}} plain={{.}}, end`), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "out", ".shellrc")
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "shellrc.tmpl", Dest: dest})
+
+	if r.Status != StatusDeployed {
+		t.Fatalf("expected Deployed, got %s (%v)", r.Status, r.Err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if string(got) != "export X=fine plain=<no value>, end" {
+		t.Fatalf("content mismatch: %q", got)
+	}
+}
+
+func TestCheckTemplateUndefinedKeyReportsDrifted(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "kitty.conf.tmpl")
+	if err := os.WriteFile(src, []byte("font={{.FONT}}\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "out", "kitty.conf")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir dest dir: %v", err)
+	}
+	if err := os.WriteFile(dest, []byte("font=monospace\n"), 0o600); err != nil {
+		t.Fatalf("write dest: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	if status := d.Check("kitty.conf.tmpl", dest); status != CheckDrifted {
+		t.Fatalf("expected Drifted when render fails, got %s", status)
+	}
+}
+
+func TestRenderUndefinedKeyErrors(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "editor.tmpl")
+	if err := os.WriteFile(src, []byte("v={{.MISSING}}\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	out, err := Render(src)
+	if err == nil {
+		t.Fatalf("expected error, got output %q", out)
+	}
+	if !strings.Contains(err.Error(), "no entry for key") {
+		t.Fatalf("expected missing-key error, got %v", err)
+	}
+}

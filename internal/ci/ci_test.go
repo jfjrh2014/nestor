@@ -378,6 +378,50 @@ func TestValidateProfilesDotfiles(t *testing.T) {
 			t.Errorf("expected src-not-found warning, got: %+v", r.Findings)
 		}
 	})
+
+	t.Run("renderable tmpl src passes silently", func(t *testing.T) {
+		srcDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(srcDir, "ok.tmpl"), []byte("x={{env \"HOME\"}}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := &config.Config{
+			Version: 1,
+			Dotfiles: config.Dotfiles{
+				Source:    srcDir,
+				Templates: []config.Template{{Src: "ok.tmpl", Dest: "~/.x"}},
+			},
+		}
+		r := Validate(cfg, srcDir)
+		for _, f := range r.Findings {
+			if strings.Contains(f.Message, "ok.tmpl") {
+				t.Errorf("unexpected finding for renderable template: %+v", f)
+			}
+		}
+	})
+
+	t.Run("tmpl src with undefined key errors", func(t *testing.T) {
+		srcDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(srcDir, "bad.tmpl"), []byte("v={{.UNDEFINED}}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := &config.Config{
+			Version: 1,
+			Dotfiles: config.Dotfiles{
+				Source:    srcDir,
+				Templates: []config.Template{{Src: "bad.tmpl", Dest: "~/.x"}},
+			},
+		}
+		r := Validate(cfg, srcDir)
+		found := false
+		for _, f := range r.Findings {
+			if f.Category == "dotfiles" && f.Severity == SeverityError && strings.Contains(f.Message, "fails to render") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected fails-to-render error, got: %+v", r.Findings)
+		}
+	})
 }
 
 func TestValidateProfilesSecrets(t *testing.T) {

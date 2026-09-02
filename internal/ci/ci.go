@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/dotfiles"
 	"github.com/jfjrh2014/nestor/internal/secrets"
 )
 
@@ -200,43 +202,9 @@ func parsePkgSpec(raw string) parsedSpec {
 }
 
 func validateDotfiles(cfg *config.Config, source string) []Finding {
-	var out []Finding
-
-	// duplication check: same dest path
-	destSeen := map[string]bool{}
-	for _, t := range cfg.Dotfiles.Templates {
-		if t.Dest == "" {
-			out = append(out, Finding{SeverityError, "dotfiles", "template with empty dest path"})
-			continue
-		}
-		if t.Src == "" {
-			out = append(out, Finding{SeverityError, "dotfiles", fmt.Sprintf("template dest %q has empty src", t.Dest)})
-			continue
-		}
-		if destSeen[t.Dest] {
-			out = append(out, Finding{SeverityError, "dotfiles", fmt.Sprintf("duplicate dest path %q", t.Dest)})
-		}
-		destSeen[t.Dest] = true
-	}
-
-	// source file existence (only if source dir provided)
-	if source != "" {
-		for _, t := range cfg.Dotfiles.Templates {
-			srcPath := t.Src
-			if !filepath.IsAbs(srcPath) {
-				srcPath = filepath.Join(source, srcPath)
-			}
-			if _, err := os.Stat(srcPath); err != nil {
-				out = append(out, Finding{
-					SeverityWarning,
-					"dotfiles",
-					fmt.Sprintf("template src %q not found (%v)", t.Src, osErrText(err)),
-				})
-			}
-		}
-	}
-
-	return out
+	// Base layer first: templateFindings covers empty fields, duplicate and
+	// override dests, src existence, and render checks for .tmpl files.
+	return templateFindings("dotfiles", cfg.Dotfiles.Templates, source, map[string]bool{})
 }
 
 func validateSecrets(cfg *config.Config) []Finding {
@@ -304,6 +272,19 @@ func templateFindings(prefix string, tmpl []config.Template, source string, dest
 					prefix,
 					fmt.Sprintf("template src %q not found (%v)", t.Src, osErrText(err)),
 				})
+				continue
+			}
+			// Templates that will be rendered at deploy time are rendered
+			// here too: an undefined key passes src-existence but fails
+			// every future deploy, so report it now as an error.
+			if strings.HasSuffix(srcPath, ".tmpl") {
+				if _, err := dotfiles.Render(srcPath); err != nil {
+					out = append(out, Finding{
+						SeverityError,
+						prefix,
+						fmt.Sprintf("template src %q fails to render (%v)", t.Src, osErrText(err)),
+					})
+				}
 			}
 		}
 	}

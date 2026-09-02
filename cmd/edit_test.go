@@ -94,8 +94,9 @@ func TestEditPreviewRenderedOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write a template with simple Go template syntax.
-	tmplContent := "name = {{.name}}\n"
+	// Write a template with supported syntax (env func + literals).
+	// (.Field lookups have no data source by design and now fail loudly.)
+	tmplContent := "name = {{env \"NESTOR_EDIT_TEST\"}} ok\n"
 	tmplPath := filepath.Join(srcDir, "gitconfig.tmpl")
 	if err := os.WriteFile(tmplPath, []byte(tmplContent), 0o644); err != nil {
 		t.Fatal(err)
@@ -107,6 +108,7 @@ func TestEditPreviewRenderedOutput(t *testing.T) {
 	}
 
 	t.Setenv("EDITOR", "true")
+	t.Setenv("NESTOR_EDIT_TEST", "marcus")
 
 	origCfgFile := cfgFile
 	cfgFile = cfgPath
@@ -120,6 +122,9 @@ func TestEditPreviewRenderedOutput(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "--- preview (rendered) ---") {
 		t.Errorf("expected preview header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "name = marcus ok") {
+		t.Errorf("expected rendered line, got:\n%s", out)
 	}
 	if !strings.Contains(out, "--- end preview ---") {
 		t.Errorf("expected preview footer, got:\n%s", out)
