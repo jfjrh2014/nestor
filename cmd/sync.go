@@ -91,20 +91,23 @@ func runSync(ctx context.Context) error {
 	p.Header("config")
 	outPath := configPath()
 
-	// Merge with existing config if present
-	if _, statErr := os.Stat(outPath); statErr == nil {
+	// Load the existing config before replacing it. A load failure is fatal:
+	// sync is about to overwrite this file, and silently discarding a config
+	// we failed to parse would destroy hand-maintained mappings over one typo.
+	existing, existingErr := loadExistingForSync(outPath)
+	if existingErr != nil {
+		return existingErr
+	}
+	if existing != nil {
 		p.Warn(fmt.Sprintf("config already exists at %s — merging", outPath))
-		existing, loadErr := config.Load(outPath)
-		if loadErr == nil {
-			existing.Packages.Common = mergeStrings(existing.Packages.Common, foundPkgs)
-			existing.Dotfiles.Templates = mergeDotfiles(existing.Dotfiles.Templates, foundDots)
-			// Preserve the freshly-computed source dir if the existing config has
-			// none — otherwise the merged config points at templates with no source.
-			if existing.Dotfiles.Source == "" {
-				existing.Dotfiles.Source = defaultSourceDir
-			}
-			cfg = existing
+		existing.Packages.Common = mergeStrings(existing.Packages.Common, foundPkgs)
+		existing.Dotfiles.Templates = mergeDotfiles(existing.Dotfiles.Templates, foundDots)
+		// Preserve the freshly-computed source dir if the existing config has
+		// none — otherwise the merged config points at templates with no source.
+		if existing.Dotfiles.Source == "" {
+			existing.Dotfiles.Source = defaultSourceDir
 		}
+		cfg = existing
 	}
 
 	// Materialize detected dotfiles as templates in the resolved source dir. This
@@ -120,11 +123,16 @@ func runSync(ctx context.Context) error {
 		if err := os.MkdirAll(effectiveSource, 0o755); err != nil {
 			return fmt.Errorf("sync: create source dir: %w", err)
 		}
-		copied, copyErr := copyDotfileTemplates(home, effectiveSource, foundDots)
+		copied, skipped, copyErr := copyDotfileTemplates(home, effectiveSource, foundDots)
 		if copyErr != nil {
 			p.Warn(fmt.Sprintf("dotfile copy: %v", copyErr))
 		}
-		p.OK(fmt.Sprintf("copied %d template(s) into %s", copied, effectiveSource))
+		if copied > 0 {
+			p.OK(fmt.Sprintf("copied %d template(s) into %s", copied, effectiveSource))
+		}
+		if skipped > 0 {
+			p.Info(fmt.Sprintf("kept %d existing template(s) (not re-copied)", skipped))
+		}
 	}
 
 	data, err := config.Marshal(cfg)
@@ -143,6 +151,24 @@ func runSync(ctx context.Context) error {
 	p.OK(fmt.Sprintf("config written to %s", outPath))
 
 	return nil
+}
+
+// loadExistingForSync returns the parsed existing config at path, or nil when
+// no file exists there yet. Any other read or parse error is returned: sync
+// is about to overwrite the file, so refusing to proceed is the only safe
+// answer — proceeding would silently discard the user's hand-maintained config.
+func loadExistingForSync(path string) (*config.Config, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("sync: checking existing config: %w", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("sync: existing config at %s is invalid, refusing to overwrite: %w", path, err)
+	}
+	return cfg, nil
 }
 
 // commonDotfiles to look for in $HOME.
@@ -218,9 +244,15 @@ func scanDotfiles(home string) []config.Template {
 // copyDotfileTemplates materializes detected dotfiles as template files in the
 // source dir, so the generated config points at files that actually exist. A
 // template's Src (e.g. ".bashrc.tmpl") is mapped back to the detected file
-// (".bashrc") in the home dir. Returns the number of files successfully copied.
-func copyDotfileTemplates(home, sourceDir string, templates []config.Template) (int, error) {
+// (".bashrc") in the home dir. Returns the number of files copied and skipped.
+//
+// Templates that already exist in the source dir are left untouched: after a
+// first sync they are the user's working copies (edited, merged, secret
+// templated), and the live home file drifts from them the moment either side
+// changes. Re-copying would silently destroy those edits on every re-sync.
+func copyDotfileTemplates(home, sourceDir string, templates []config.Template) (int, int, error) {
 	copied := 0
+	skipped := 0
 	var firstErr error
 	for _, t := range templates {
 		// t.Src is like ".bashrc.tmpl" — strip the ".tmpl" suffix to recover the
@@ -228,6 +260,10 @@ func copyDotfileTemplates(home, sourceDir string, templates []config.Template) (
 		srcFile := strings.TrimSuffix(t.Src, ".tmpl")
 		src := filepath.Join(home, srcFile)
 		dest := filepath.Join(sourceDir, t.Src)
+		if _, err := os.Stat(dest); err == nil {
+			skipped++
+			continue
+		}
 		if err := copyFileSynced(src, dest); err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -236,7 +272,7 @@ func copyDotfileTemplates(home, sourceDir string, templates []config.Template) (
 		}
 		copied++
 	}
-	return copied, firstErr
+	return copied, skipped, firstErr
 }
 
 // copyFileSynced copies src to dest, preserving file mode.
