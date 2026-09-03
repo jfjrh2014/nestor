@@ -851,3 +851,11 @@ profiles:
 - Three test-draft lessons this session: repeated the #62 mkdir-before-write slip in the Check test; first ci subtests passed "" as the source dir (tests skipped the check they asserted); the ci dedup left an orphaned `return out` that the build caught.
 - 355 test functions across 13/13 packages, -race clean, gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit db24e2d).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-03 — Daily dev session #67 — sync stops destroying configs and edits
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`). Bug-hunt session, cmd/ coverage gaps this time.
+- Two data-loss bugs in `nestor sync`, found in one sweep: (1) the merge block did `if loadErr == nil { merge }` with no else — an existing nestor.yml that failed to parse was silently discarded and overwritten with a freshly-scanned skeleton. One YAML typo and every hand-maintained mapping/template/profile was gone. (2) `copyDotfileTemplates` re-copied the live home file over existing templates on every re-sync, destroying user edits to their working copies (the files `up` actually deploys).
+- Fix 1: `loadExistingForSync` — missing file returns nil (first-run path unchanged), parse/read error is fatal with "refusing to overwrite"; the broken file survives byte-for-byte. Fix 2: existing templates are skipped and counted, new output line "kept N existing template(s) (not re-copied)"; signature now (copied, skipped, error).
+- 4 new tests: unparseable-config refusal (asserts the file survives verbatim), missing-file-returns-nil, parsed-config happy path, edited-template-survives-resync (first sync, hand edit, home drift, re-sync keeps the edit). 4 existing call sites updated for the new signature.
+- 359 test functions across 13/13 packages, -race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit 086c57f).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
