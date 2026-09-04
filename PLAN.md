@@ -859,3 +859,14 @@ profiles:
 - 4 new tests: unparseable-config refusal (asserts the file survives verbatim), missing-file-returns-nil, parsed-config happy path, edited-template-survives-resync (first sync, hand edit, home drift, re-sync keeps the edit). 4 existing call sites updated for the new signature.
 - 359 test functions across 13/13 packages, -race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit 086c57f).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+
+### 2026-09-04 — Daily dev session #68 — symlink strategy renders templates
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`). Bug-hunt session, dotfiles engine this time.
+- Probe confirmed a sibling of #66 living in the other deploy strategy: `Deployer.symlink` linked the raw `.tmpl` file straight into place, so a symlink-strategy config deployed unrendered `{{...}}` into the real dotfile — bypassing `missingkey=error` and every template feature, with `Check` blessing the result as Present (its symlink branch returned before the render comparison). The copy path renders first and never had this bug.
+- Fix: symlink of a `.tmpl` now renders, writes `<srcdir>/.nestor-rendered/<src base>` (refreshed every deploy), and links that. Plain files still link src directly. Undefined key = render error = StatusError, no dest touched, matching copy.
+- First draft wrote the render to an os.CreateTemp file removed when Deploy returned — my own regression test caught the dest going dangling the moment `up` finished. Stable path, deterministic name, same 0600.
+- `Check` recognizes a deployed rendered link by parent-dir marker + content match against a fresh render: stale or tampered render files read as Drifted, not Present.
+- 6 new tests: renders-before-linking (content through the link), undefined-key fails with no dest, plain files still link src, Check Present on rendered link, Check Drifted after src edit, isRenderedLink table (recognized/tampered/unmarked).
+- Full gate: 365 test functions across 13/13 packages, -race clean on dotfiles+cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit a3dc284).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
