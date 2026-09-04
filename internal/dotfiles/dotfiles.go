@@ -122,13 +122,36 @@ func (d Deployer) symlink(src, dest string, t Template) Result {
 		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("mkdir: %w", err)}
 	}
 
+	// Templates must be rendered before linking: a symlink pointed at the raw
+	// .tmpl file deploys unrendered {{...}} syntax into the dotfile, bypassing
+	// missingkey=error and every template feature (the copy path renders
+	// first, so it never had this bug). The rendered bytes live in a stable
+	// .nestor-rendered/ file beside the source — refreshed on every deploy —
+	// because a temp file deleted at Deploy's return would leave the dest a
+	// dangling link. Plain files link to src directly, as before.
+	linkTarget := src
+	if strings.HasSuffix(src, ".tmpl") {
+		data, err := renderTemplate(src)
+		if err != nil {
+			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("render: %w", err)}
+		}
+		renderPath := renderedLinkPath(src)
+		if err := os.MkdirAll(filepath.Dir(renderPath), 0o700); err != nil {
+			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("render: %w", err)}
+		}
+		if err := os.WriteFile(renderPath, data, 0o600); err != nil {
+			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("render: %w", err)}
+		}
+		linkTarget = renderPath
+	}
+
 	// Try to remove existing dest first.
 	// We don't reschedule as "skipped" because the user wants the symlink to reflect src.
 	_ = os.Remove(dest)
 
-	if err := os.Symlink(src, dest); err != nil {
+	if err := os.Symlink(linkTarget, dest); err != nil {
 		// Peerless fallback: if symlinking fails (permissions, FS, etc.), attempt a unix-style ln.
-		if fallbackErr := fallbackCopy(src, dest); fallbackErr != nil {
+		if fallbackErr := fallbackCopy(linkTarget, dest); fallbackErr != nil {
 			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("symlink: %w (fallback: %v)", err, fallbackErr)}
 		}
 	}
@@ -200,9 +223,12 @@ func (d Deployer) Check(src, dest string) CheckStatus {
 		return CheckAbsent
 	}
 	if stat.Mode()&os.ModeSymlink != 0 {
-		// For symlinks, check if target points to src
+		// For symlinks, check if target points to src — either directly
+		// (plain files) or at the deployed render of src (the .tmpl symlink
+		// strategy links a temp file holding rendered output, see
+		// Deployer.symlink).
 		target, err := os.Readlink(destPath)
-		if err != nil || !samePath(target, srcPath) {
+		if err != nil || !isRenderedLink(target, srcPath) {
 			return CheckDrifted
 		}
 		return CheckPresent
@@ -254,6 +280,48 @@ func (s CheckStatus) String() string {
 	return "unknown"
 }
 
+// isRenderedLink reports whether a symlink target counts as "deployed from
+// srcPath". Plain files link to srcPath itself. Rendered templates link the
+// rendered-output file in renderedLinkMarker (see renderedLinkPath);
+// recognition verifies the target sits in that dir and its content still
+// matches a fresh render, so tampered or stale files read as drift.
+//
+// renderedLinkMarker names the directory the symlink strategy writes
+// rendered template output to before linking: <srcdir>/.nestor-rendered/<src
+// base>. It gives the link a stable target that survives Deploy, and lets
+// Check recognize a deployed rendered link by content instead of drift.
+const renderedLinkMarker = ".nestor-rendered"
+
+// renderedLinkPath maps a template src to its rendered-output file beside it.
+func renderedLinkPath(src string) string {
+	return filepath.Join(filepath.Dir(src), renderedLinkMarker, filepath.Base(src))
+}
+
+// isRenderedLink reports whether a symlink target counts as "deployed from
+// srcPath". Plain files link to srcPath itself. Rendered templates link the
+// rendered-output file (renderedLinkPath); recognition verifies the target
+// sits in the rendered dir and its content still matches a fresh render, so
+// tampered or stale files read as drift.
+func isRenderedLink(target, srcPath string) bool {
+	if samePath(target, srcPath) {
+		return true
+	}
+	if filepath.Base(filepath.Dir(target)) == renderedLinkMarker {
+		data, err := os.ReadFile(target)
+		if err != nil {
+			return false
+		}
+		rendered, err := renderTemplate(srcPath)
+		if err != nil {
+			return false
+		}
+		return string(data) == string(rendered)
+	}
+	return false
+}
+
+// samePath reports whether two paths point at the same location after
+// resolving ~ and relative segments. It does not resolve symlinks.
 func samePath(a, b string) bool {
 	// Normalize for comparison — handles relative vs absolute
 	absA, errA := filepath.Abs(a)

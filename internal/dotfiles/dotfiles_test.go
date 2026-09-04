@@ -576,3 +576,165 @@ func TestRenderUndefinedKeyErrors(t *testing.T) {
 		t.Fatalf("expected missing-key error, got %v", err)
 	}
 }
+
+func TestSymlinkTemplateRendersBeforeLinking(t *testing.T) {
+	srcDir := t.TempDir()
+	home := t.TempDir()
+	tmpl := filepath.Join(srcDir, "gitconfig.tmpl")
+	if err := os.WriteFile(tmpl, []byte("[user]\n\tname = {{env \"NESTOR_TEST_RENDER\"}}\n"), 0o644); err != nil {
+		t.Fatalf("write tmpl: %v", err)
+	}
+	t.Setenv("NESTOR_TEST_RENDER", "rendered-by-test")
+	dest := filepath.Join(home, ".gitconfig")
+
+	d := Deployer{Strategy: StrategySymlink, Source: srcDir}
+	r := d.Deploy(Template{Src: "gitconfig.tmpl", Dest: dest})
+	if r.Status != StatusDeployed || r.Err != nil {
+		t.Fatalf("deploy: status=%s err=%v", r.Status, r.Err)
+	}
+
+	target, err := os.Readlink(dest)
+	if err != nil {
+		t.Fatalf("dest is not a symlink: %v", err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if string(data) != "[user]\n\tname = rendered-by-test\n" {
+		t.Fatalf("dest content = %q, want rendered output", string(data))
+	}
+	if filepath.Base(filepath.Dir(target)) != renderedLinkMarker {
+		t.Fatalf("link target %q should live in the %s render dir", target, renderedLinkMarker)
+	}
+}
+
+func TestSymlinkTemplateUndefinedKeyFailsNotRaw(t *testing.T) {
+	srcDir := t.TempDir()
+	home := t.TempDir()
+	tmpl := filepath.Join(srcDir, "app.conf.tmpl")
+	if err := os.WriteFile(tmpl, []byte("token = {{.GH_TOKEN}}\n"), 0o644); err != nil {
+		t.Fatalf("write tmpl: %v", err)
+	}
+	dest := filepath.Join(home, ".app.conf")
+
+	d := Deployer{Strategy: StrategySymlink, Source: srcDir}
+	r := d.Deploy(Template{Src: "app.conf.tmpl", Dest: dest})
+	if r.Status != StatusError {
+		t.Fatalf("expected Error, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "render") {
+		t.Fatalf("expected render error, got %v", r.Err)
+	}
+	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+		t.Fatalf("dest should not exist after failed render, got %v", err)
+	}
+}
+
+func TestSymlinkPlainFileStillLinksToSrc(t *testing.T) {
+	srcDir := t.TempDir()
+	home := t.TempDir()
+	plain := filepath.Join(srcDir, "plain.conf")
+	if err := os.WriteFile(plain, []byte("plain\n"), 0o644); err != nil {
+		t.Fatalf("write plain: %v", err)
+	}
+	dest := filepath.Join(home, ".plain.conf")
+
+	d := Deployer{Strategy: StrategySymlink, Source: srcDir}
+	r := d.Deploy(Template{Src: "plain.conf", Dest: dest})
+	if r.Status != StatusDeployed || r.Err != nil {
+		t.Fatalf("deploy: status=%s err=%v", r.Status, r.Err)
+	}
+	target, err := os.Readlink(dest)
+	if err != nil {
+		t.Fatalf("dest is not a symlink: %v", err)
+	}
+	if !samePath(target, plain) {
+		t.Fatalf("plain file should link src directly, got target %q", target)
+	}
+}
+
+func TestCheckSymlinkRenderedTemplatePresent(t *testing.T) {
+	srcDir := t.TempDir()
+	home := t.TempDir()
+	tmpl := filepath.Join(srcDir, "gitconfig.tmpl")
+	if err := os.WriteFile(tmpl, []byte("[user]\n\tname = {{env \"NESTOR_TEST_CHECK\"}}\n"), 0o644); err != nil {
+		t.Fatalf("write tmpl: %v", err)
+	}
+	t.Setenv("NESTOR_TEST_CHECK", "checker")
+	dest := filepath.Join(home, ".gitconfig")
+
+	d := Deployer{Strategy: StrategySymlink, Source: srcDir}
+	if r := d.Deploy(Template{Src: "gitconfig.tmpl", Dest: dest}); r.Status != StatusDeployed {
+		t.Fatalf("deploy: status=%s err=%v", r.Status, r.Err)
+	}
+	if got := d.Check("gitconfig.tmpl", dest); got != CheckPresent {
+		t.Fatalf("Check after deploy = %s, want Present (rendered links must not read as drift)", got)
+	}
+}
+
+func TestCheckSymlinkRenderedTemplateDriftsOnContentChange(t *testing.T) {
+	srcDir := t.TempDir()
+	home := t.TempDir()
+	tmpl := filepath.Join(srcDir, "gitconfig.tmpl")
+	if err := os.WriteFile(tmpl, []byte("[user]\n\tname = {{env \"NESTOR_TEST_DRIFT\"}}\n"), 0o644); err != nil {
+		t.Fatalf("write tmpl: %v", err)
+	}
+	t.Setenv("NESTOR_TEST_DRIFT", "before")
+	dest := filepath.Join(home, ".gitconfig")
+
+	d := Deployer{Strategy: StrategySymlink, Source: srcDir}
+	if r := d.Deploy(Template{Src: "gitconfig.tmpl", Dest: dest}); r.Status != StatusDeployed {
+		t.Fatalf("deploy: status=%s err=%v", r.Status, r.Err)
+	}
+	if err := os.WriteFile(tmpl, []byte("[user]\n\tname = {{env \"NESTOR_TEST_DRIFT\"}} changed\n"), 0o644); err != nil {
+		t.Fatalf("edit tmpl: %v", err)
+	}
+	if got := d.Check("gitconfig.tmpl", dest); got != CheckDrifted {
+		t.Fatalf("Check after src edit = %s, want Drifted", got)
+	}
+}
+
+func TestIsRenderedLinkRecognition(t *testing.T) {
+	srcDir := t.TempDir()
+	tmpl := filepath.Join(srcDir, "x.tmpl")
+	if err := os.WriteFile(tmpl, []byte("v = {{env \"NESTOR_TEST_REC\"}}\n"), 0o644); err != nil {
+		t.Fatalf("write tmpl: %v", err)
+	}
+	t.Setenv("NESTOR_TEST_REC", "rec")
+
+	rendered, err := renderTemplate(tmpl)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	marked := filepath.Join(t.TempDir(), renderedLinkMarker, "x.tmpl")
+	if err := os.MkdirAll(filepath.Dir(marked), 0o700); err != nil {
+		t.Fatalf("mkdir render dir: %v", err)
+	}
+	if err := os.WriteFile(marked, rendered, 0o600); err != nil {
+		t.Fatalf("write marked: %v", err)
+	}
+	if !isRenderedLink(marked, tmpl) {
+		t.Fatal("marked file with matching render should be recognized")
+	}
+
+	// Marker dir but content differs from a fresh render: not deployed.
+	if err := os.MkdirAll(filepath.Dir(marked), 0o700); err != nil {
+		t.Fatalf("mkdir render dir: %v", err)
+	}
+	if err := os.WriteFile(marked, []byte("tampered\n"), 0o600); err != nil {
+		t.Fatalf("write tampered: %v", err)
+	}
+	if isRenderedLink(marked, tmpl) {
+		t.Fatal("tampered content must not be recognized as rendered")
+	}
+
+	// No marker, not src: not recognized.
+	unmarked := filepath.Join(t.TempDir(), "other")
+	if err := os.WriteFile(unmarked, rendered, 0o600); err != nil {
+		t.Fatalf("write unmarked: %v", err)
+	}
+	if isRenderedLink(unmarked, tmpl) {
+		t.Fatal("unmarked path must not be recognized")
+	}
+}
