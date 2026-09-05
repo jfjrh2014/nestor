@@ -524,7 +524,7 @@ func TestListOutMissingConfig(t *testing.T) {
 	defer func() { cfgFile = "" }()
 
 	var out bytes.Buffer
-	if err := runListOut(context.Background(), &out); err == nil {
+	if err := runListOut(context.Background(), "", &out); err == nil {
 		t.Fatal("expected list error for missing config, got nil")
 	}
 }

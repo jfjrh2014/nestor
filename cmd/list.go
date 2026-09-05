@@ -26,21 +26,38 @@ installed/present or missing. Useful quick health check.`,
 	},
 }
 
+var listProfileFlag string
+
 func init() {
+	listCmd.Flags().StringVarP(&listProfileFlag, "profile", "p", "", "view status for a named profile (extra packages/dotfiles/secrets)")
 	rootCmd.AddCommand(listCmd)
 }
 
 func runList(ctx context.Context) error {
-	return runListOut(ctx, os.Stdout)
+	profileName, _ := ctx.Value(profileKey{}).(string)
+	if profileName == "" {
+		profileName = listProfileFlag
+	}
+	return runListOut(ctx, profileName, os.Stdout)
 }
 
-func runListOut(_ context.Context, w io.Writer) error {
+func runListOut(_ context.Context, profileName string, w io.Writer) error {
 	p := ui.New(w)
 
 	path := configPath()
 	cfg, err := config.Load(path)
 	if err != nil {
 		return fmt.Errorf("list: %w", err)
+	}
+
+	// Profile layering must mirror 'up --profile' exactly (sessions #59-#65:
+	// diff, doctor, secrets, ci, dashboard all had profile-blind variants).
+	// Unknown profile is a hard error before any status work.
+	if profileName != "" {
+		if !cfg.ValidProfile(profileName) {
+			return fmt.Errorf("list: unknown profile: %s", profileName)
+		}
+		p.OK(fmt.Sprintf("profile: %s", profileName))
 	}
 
 	plat, err := platform.Detect()
@@ -61,7 +78,10 @@ func runListOut(_ context.Context, w io.Writer) error {
 		},
 	}
 
-	for _, raw := range resolver.Resolve(plat.OS) {
+	resolved := resolver.Resolve(plat.OS)
+	resolved = append(resolved, cfg.ProfilePackages(profileName)...)
+
+	for _, raw := range resolved {
 		spec := packages.ParseSpec(raw, plat.PackageManager)
 		total++
 		mgr, err := packages.NewManager(spec.Manager)
@@ -86,7 +106,11 @@ func runListOut(_ context.Context, w io.Writer) error {
 	// --- dotfiles ---
 	p.Header("dotfiles")
 	dotTotal, dotOk, dotMissing := 0, 0, 0
-	if len(cfg.Dotfiles.Templates) == 0 {
+	// Layer profile dotfiles after base — same order 'up' deploys them.
+	templates := cfg.Dotfiles.Templates
+	templates = append(templates, cfg.ProfileDotfiles(profileName)...)
+
+	if len(templates) == 0 {
 		p.Info("no templates declared")
 	} else {
 		strategy := dotfiles.Strategy(cfg.Dotfiles.Strategy)
@@ -99,7 +123,7 @@ func runListOut(_ context.Context, w io.Writer) error {
 			source = filepath.Join(home, ".config", "nestor", "dotfiles")
 		}
 
-		for _, t := range cfg.Dotfiles.Templates {
+		for _, t := range templates {
 			dotTotal++
 			deployer := dotfiles.Deployer{Strategy: strategy, Source: source}
 			status := deployer.Check(t.Src, t.Dest)
@@ -125,11 +149,15 @@ func runListOut(_ context.Context, w io.Writer) error {
 
 	// --- secrets ---
 	p.Header("secrets")
-	secTotal := len(cfg.Secrets.Mappings)
+	secMappings, _, err := effectiveSecretMappings(cfg, profileName)
+	if err != nil {
+		return fmt.Errorf("list: %w", err)
+	}
+	secTotal := len(secMappings)
 	if secTotal == 0 {
 		p.Info("no secrets declared")
 	} else {
-		for _, m := range cfg.Secrets.Mappings {
+		for _, m := range secMappings {
 			// We don't resolve secrets in list — just show the mapping exists.
 			// Secrets aren't status-checked, so we don't add them to total/ok/missing
 			// (the summary counts verified items only).
