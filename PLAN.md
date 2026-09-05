@@ -870,3 +870,12 @@ profiles:
 - 6 new tests: renders-before-linking (content through the link), undefined-key fails with no dest, plain files still link src, Check Present on rendered link, Check Drifted after src edit, isRenderedLink table (recognized/tampered/unmarked).
 - Full gate: 365 test functions across 13/13 packages, -race clean on dotfiles+cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit a3dc284).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+
+### 2026-09-05 — Daily dev session #69 — profile-aware list
+
+- v0.1 still blocked: token scopes re-checked (no `workflow`). Bug-hunt session, cmd/ coverage gaps this time (list.go 48%, pull.go 39%, remote.go 0%, expandHome 43%).
+- Sixth member of the profile-blindness family (#59 diff, #62 doctor, #63 secrets, #64 ci, #65 dashboard): `nestor list` showed base-only status while `up --profile` deployed the profile's extra packages, dotfiles, and secrets — a profile-managed machine's vim, .workrc, and WORK_TOKEN were invisible to the status view and the summary count.
+- Fix mirrors the family exactly: `--profile/-p` flag with ctx fallback (diff's pattern), unknown profile = hard error before any status work, `ProfilePackages`/`ProfileDotfiles` layered after base in deploy order, `effectiveSecretMappings` (#63 helper — one implementation, now three callers) for the secret set.
+- 2 new tests: profile layering (base-only leaks nothing; profile view shows base+profile items, the pre-deployed .workrc as present, and "3 managed" in the summary), unknown-profile error. Two existing call sites updated for the new runListOut signature.
+- 361 test functions across 13/13 packages, -race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit e296aa0).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
