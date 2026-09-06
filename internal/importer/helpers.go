@@ -3,7 +3,8 @@ package importer
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
+
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 )
 
 // execLookPath is a wrapper around exec.LookPath so it can be mocked in tests.
@@ -20,13 +21,12 @@ var runCommand = func(name string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// expandHome replaces a leading ~ with the home directory.
+// expandHome replaces a leading ~ or ~/... with the home directory.
+// The "~user/..." form is deliberately NOT expanded; see pathutil.ExpandHome.
 func expandHome(path string) string {
-	if len(path) >= 2 && path[0] == '~' && (path[1] == '/' || path[1] == filepath.Separator) {
-		home, err := osUserHomeDir()
-		if err == nil {
-			return home + path[1:]
-		}
+	home, err := osUserHomeDir()
+	if err != nil {
+		home = ""
 	}
-	return path
+	return pathutil.ExpandHome(path, home)
 }

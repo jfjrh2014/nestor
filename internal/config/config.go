@@ -3,8 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -126,7 +126,7 @@ func Load(path string) (*Config, error) {
 
 	// expand ~ in paths
 	home, _ := os.UserHomeDir()
-	cfg.Dotfiles.Source = expandHome(cfg.Dotfiles.Source, home)
+	cfg.Dotfiles.Source = pathutil.ExpandHome(cfg.Dotfiles.Source, home)
 
 	return &cfg, nil
 }
@@ -166,13 +166,18 @@ func (c *Config) validate() error {
 		return fmt.Errorf("secrets.provider %q is not valid (allowed: env, 1password, bitwarden, vault)", c.Secrets.Provider)
 	}
 
-	// Validate templates: src and dest must be non-empty.
+	// Validate templates: src and dest must be non-empty, dest must not use
+	// the "~user/..." tilde form (it would silently deploy into the current
+	// user's home instead of the named user's).
 	for i, t := range c.Dotfiles.Templates {
 		if t.Src == "" {
 			return fmt.Errorf("dotfiles.templates[%d]: src is empty", i)
 		}
 		if t.Dest == "" {
 			return fmt.Errorf("dotfiles.templates[%d]: dest is empty (src=%q)", i, t.Src)
+		}
+		if pathutil.IsOtherUserTilde(t.Dest) {
+			return fmt.Errorf("dotfiles.templates[%d]: dest %q uses the ~user/... form, which nestor does not expand (it would deploy into your own home)", i, t.Dest)
 		}
 	}
 
@@ -185,13 +190,19 @@ func (c *Config) validate() error {
 		dup[t.Dest] = true
 	}
 
-	// Validate secret mappings: key non-empty, inject targets non-empty.
+	// Validate secret mappings: key non-empty, inject targets non-empty and
+	// not using the "~user/..." tilde form.
 	for i, m := range c.Secrets.Mappings {
 		if m.Key == "" {
 			return fmt.Errorf("secrets.mappings[%d]: key is empty", i)
 		}
 		if len(m.Inject) == 0 {
 			return fmt.Errorf("secrets.mappings[%d]: inject is empty (key=%q)", i, m.Key)
+		}
+		for dest := range m.Inject {
+			if pathutil.IsOtherUserTilde(dest) {
+				return fmt.Errorf("secrets.mappings[%d]: inject target %q uses the ~user/... form, which nestor does not expand (it would inject into your own home)", i, dest)
+			}
 		}
 	}
 
@@ -205,6 +216,9 @@ func (c *Config) validate() error {
 			if t.Dest == "" {
 				return fmt.Errorf("profiles.%s.dotfiles[%d]: dest is empty (src=%q)", name, i, t.Src)
 			}
+			if pathutil.IsOtherUserTilde(t.Dest) {
+				return fmt.Errorf("profiles.%s.dotfiles[%d]: dest %q uses the ~user/... form, which nestor does not expand (it would deploy into your own home)", name, i, t.Dest)
+			}
 			if pdup[t.Dest] {
 				return fmt.Errorf("profiles.%s.dotfiles: duplicate dest %q", name, t.Dest)
 			}
@@ -216,6 +230,11 @@ func (c *Config) validate() error {
 			}
 			if len(m.Inject) == 0 {
 				return fmt.Errorf("profiles.%s.secrets[%d]: inject is empty (key=%q)", name, i, m.Key)
+			}
+			for dest := range m.Inject {
+				if pathutil.IsOtherUserTilde(dest) {
+					return fmt.Errorf("profiles.%s.secrets[%d]: inject target %q uses the ~user/... form, which nestor does not expand (it would inject into your own home)", name, i, dest)
+				}
 			}
 		}
 	}
@@ -233,11 +252,5 @@ func Marshal(cfg *Config) ([]byte, error) {
 }
 
 func expandHome(path, home string) string {
-	if path == "" {
-		return path
-	}
-	if path[0] == '~' {
-		return filepath.Join(home, path[1:])
-	}
-	return path
+	return pathutil.ExpandHome(path, home)
 }

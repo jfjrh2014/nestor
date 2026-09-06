@@ -738,3 +738,42 @@ func TestIsRenderedLinkRecognition(t *testing.T) {
 		t.Fatal("unmarked path must not be recognized")
 	}
 }
+
+// TestDeployOtherUserTildeDestNotRewritten: a "~user/..." dest must be left
+// verbatim (never silently re-rooted at $HOME). With the config validator as
+// the first line of defense, the engine's job is to not make things worse:
+// the dest is not the tester's home, so the write must not land there.
+func TestDeployOtherUserTildeDestNotRewritten(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "bashrc.tmpl")
+	if err := os.WriteFile(src, []byte("export NESTOR=1\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		t.Skip("no home dir available")
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	res := d.Deploy(Template{Src: "bashrc.tmpl", Dest: "~other/.bashrc"})
+	if res.Status != StatusError {
+		t.Fatalf("want StatusError for ~other dest, got %s", res.Status)
+	}
+	// The corrupted write must not exist anywhere in the real home.
+	leak := filepath.Join(home, "other", ".bashrc")
+	if _, err := os.Stat(leak); err == nil {
+		t.Errorf("dest was silently re-rooted into the real home: %s exists", leak)
+		os.Remove(leak)
+	}
+}
+
+// TestCheckOtherUserTildeDest: diff on a "~user/..." dest reports the
+// unsupported-dest status instead of probing a bogus path.
+func TestCheckOtherUserTildeDest(t *testing.T) {
+	dir := t.TempDir()
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	if got := d.Check("x.tmpl", "~other/.bashrc"); got != CheckUnknown {
+		t.Errorf("Check(~other/.bashrc) = %s, want unsupported-dest", got)
+	}
+}

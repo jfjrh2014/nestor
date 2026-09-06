@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 )
 
 // Provider resolves a secret key to its plaintext value.
@@ -262,14 +264,6 @@ func replaceAnchoredLine(content, anchor, newLine string) (string, bool) {
 }
 
 func expandHome(p string) string {
-	if p == "" {
-		return p
-	}
-	if p[0] == '~' {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			return filepath.Join(home, p[1:])
-		}
-	}
-	return p
+	home, _ := os.UserHomeDir()
+	return pathutil.ExpandHome(p, home)
 }

@@ -258,7 +258,7 @@ func TestExpandHome(t *testing.T) {
 	if got := expandHome("~/.config"); got != "/home/tester/.config" {
 		t.Errorf("expandHome(~/.config): got %q", got)
 	}
-	if got := expandHome("~/"); got != "/home/tester/" {
+	if got := expandHome("~/"); got != "/home/tester" {
 		t.Errorf("expandHome(~/): got %q", got)
 	}
 	if got := expandHome("~other/x"); got != "~other/x" {
@@ -267,8 +267,8 @@ func TestExpandHome(t *testing.T) {
 	if got := expandHome("plain/path"); got != "plain/path" {
 		t.Errorf("expandHome(plain/path): got %q, want unchanged", got)
 	}
-	if got := expandHome("~"); got != "~" {
-		t.Errorf("expandHome(~): got %q, want unchanged (bare tilde)", got)
+	if got := expandHome("~"); got != "/home/tester" {
+		t.Errorf("expandHome(~): got %q, want /home/tester", got)
 	}
 
 	// home lookup fails -> path returned unchanged

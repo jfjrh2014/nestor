@@ -169,6 +169,10 @@ func runDiffOut(ctx context.Context, profileName string, w io.Writer) error {
 				absent++
 				driftCount++
 				p.Warn(fmt.Sprintf("src missing: %s", t.Src))
+			case dotfiles.CheckUnknown:
+				drifted++
+				driftCount++
+				p.Warn(fmt.Sprintf("unsupported dest (the ~user/... form): %s", t.Dest))
 			}
 		}
 		p.Info(fmt.Sprintf("%d present, %d drifted, %d missing", present, drifted, absent))

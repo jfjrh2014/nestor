@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 )
 
 // Strategy controls how a file is deployed.
@@ -76,6 +78,9 @@ func (d Deployer) DeployAll(temps []Template) []Result {
 
 // Deploy renders the template at t.Src and writes it to t.Dest.
 func (d Deployer) Deploy(t Template) Result {
+	if pathutil.IsOtherUserTilde(t.Dest) {
+		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("dest %q uses the ~user/... form, which nestor does not expand (it would deploy into your own home)", t.Dest)}
+	}
 	src := absPath(d.Source, t.Src)
 	dest := expandHome(t.Dest)
 
@@ -211,6 +216,9 @@ func fallbackCopy(src, dest string) error {
 // Check compares the rendered template source against the deployed dest
 // without writing anything. Used by 'nestor diff' for drift detection.
 func (d Deployer) Check(src, dest string) CheckStatus {
+	if pathutil.IsOtherUserTilde(dest) {
+		return CheckUnknown
+	}
 	srcPath := absPath(d.Source, src)
 	destPath := expandHome(dest)
 
@@ -264,6 +272,7 @@ const (
 	CheckDrifted
 	CheckAbsent
 	CheckSrcMissing
+	CheckUnknown
 )
 
 func (s CheckStatus) String() string {
@@ -276,6 +285,8 @@ func (s CheckStatus) String() string {
 		return "absent"
 	case CheckSrcMissing:
 		return "src-missing"
+	case CheckUnknown:
+		return "unsupported-dest"
 	}
 	return "unknown"
 }
@@ -340,14 +351,6 @@ func absPath(source, p string) string {
 }
 
 func expandHome(p string) string {
-	if p == "" {
-		return p
-	}
-	if p[0] == '~' {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			return filepath.Join(home, p[1:])
-		}
-	}
-	return p
+	home, _ := os.UserHomeDir()
+	return pathutil.ExpandHome(p, home)
 }

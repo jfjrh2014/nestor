@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -455,4 +456,78 @@ func TestValidateAcceptsValidConfig(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
+}
+
+// TestValidateRejectsOtherUserTilde: "~user/..." paths must be rejected loudly
+// instead of silently deploying into the current user's home.
+func TestValidateRejectsOtherUserTilde(t *testing.T) {
+	valid := func() Config {
+		return Config{
+			Version: 1,
+			Dotfiles: Dotfiles{
+				Source: "/cfg",
+				Templates: []Template{
+					{Src: "bashrc.tmpl", Dest: "~/.bashrc"},
+				},
+			},
+		}
+	}
+
+	t.Run("base template dest", func(t *testing.T) {
+		cfg := valid()
+		cfg.Dotfiles.Templates[0].Dest = "~root/.bashrc"
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "~user/...") {
+			t.Fatalf("want ~user/... error, got %v", err)
+		}
+	})
+
+	t.Run("base inject target", func(t *testing.T) {
+		cfg := valid()
+		cfg.Secrets = Secrets{Mappings: []Mapping{
+			{Key: "tok", Inject: map[string]string{"~shared/config": "tok={{.tok}}"}},
+		}}
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "~user/...") {
+			t.Fatalf("want ~user/... error, got %v", err)
+		}
+	})
+
+	t.Run("profile template dest", func(t *testing.T) {
+		cfg := valid()
+		cfg.Profiles = map[string]Profile{"work": {Dotfiles: []Template{
+			{Src: "work.tmpl", Dest: "~deploy/.gitconfig"},
+		}}}
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "~user/...") {
+			t.Fatalf("want ~user/... error, got %v", err)
+		}
+	})
+
+	t.Run("profile inject target", func(t *testing.T) {
+		cfg := valid()
+		cfg.Profiles = map[string]Profile{"work": {SecretMappings: []Mapping{
+			{Key: "tok", Inject: map[string]string{"~svc/app.conf": "tok={{.tok}}"}},
+		}}}
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "~user/...") {
+			t.Fatalf("want ~user/... error, got %v", err)
+		}
+	})
+
+	t.Run("own-home forms still accepted", func(t *testing.T) {
+		cfg := valid()
+		cfg.Dotfiles.Templates[0].Dest = "~deploy/.bashrc" // tilde but not ~user/
+		// "~deploy/" starts with ~deploy which IS ~user form; use plain forms:
+		cfg.Dotfiles.Templates[0].Dest = "~/.bashrc"
+		cfg.Secrets = Secrets{Mappings: []Mapping{
+			{Key: "tok", Inject: map[string]string{"~/.x": "v"}},
+		}}
+		cfg.Profiles = map[string]Profile{"work": {Dotfiles: []Template{
+			{Src: "work.tmpl", Dest: "~/.gitconfig"},
+		}}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("valid config rejected: %v", err)
+		}
+	})
 }

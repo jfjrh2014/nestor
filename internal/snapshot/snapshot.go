@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 )
 
 // A Snapshot records the files that were backed up before a deploy.
@@ -332,12 +334,9 @@ func sanitizePath(p string) string {
 }
 
 func expandHome(p string) string {
-	if p == "" || p[0] != '~' {
-		return p
-	}
 	home, err := userHomeDir()
 	if err != nil {
-		return p
+		home = ""
 	}
-	return filepath.Join(home, p[1:])
+	return pathutil.ExpandHome(p, home)
 }
