@@ -879,3 +879,12 @@ profiles:
 - 2 new tests: profile layering (base-only leaks nothing; profile view shows base+profile items, the pre-deployed .workrc as present, and "3 managed" in the summary), unknown-profile error. Two existing call sites updated for the new runListOut signature.
 - 361 test functions across 13/13 packages, -race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit e296aa0).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-06 — Daily dev session #70 — one ExpandHome, no silent ~user rewrites
+
+- v0.1 still blocked: token scopes re-checked earlier this week (no `workflow`). Dedup + bug-hunt session: five divergent `expandHome` copies across config/dotfiles/secrets/importer/snapshot.
+- Found by diffing the five: importer's copy (the reference) expands only `~` and `~/...`; the other four re-rooted ANY leading tilde at $HOME, so a `~root/.bashrc` or `~shared/x` dest silently deployed into the current user's home. Two tests even pinned opposite `~` semantics across packages.
+- Fix: new `internal/pathutil` — `ExpandHome(path, home)` (pure, injected home: kills four untestable os.UserHomeDir seams) + `IsOtherUserTilde(path)`. All five packages delegate; config/dotfiles/snapshot/importer keep thin wrappers so their test seams still work.
+- Defense in depth: `config.validate` now rejects `~user/...` dests and inject targets (base + profiles) with an explicit error; the dotfiles engine refuses them too (Deploy -> StatusError, new CheckUnknown -> diff reports "unsupported dest"). First regression draft caught that with re-rooting gone the engine happily created a literal `~other/` relative dir — guard added, stray test dir removed.
+- 3 new test functions (12 subtests in the config one): pathutil contract, ~user rejection across all four validate loops, engine no-rewrite + Check status. 2 importer expectations updated to the unified contract.
+- 372 test functions across 14/14 packages, -race clean, gofmt clean, vet clean, staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit a5c54ce).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
