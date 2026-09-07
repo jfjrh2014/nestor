@@ -898,3 +898,5 @@ profiles:
 - Test-draft lessons: wrote the vcs test as commit-before-push and missed the real composition (align must precede the first commit); pinned an "empty remote prefers main" expectation that is unobservable over the wire — policy corrected to first-pusher-wins; captured a cfgPath under the wrong isolated HOME so B "edited" A's file.
 - 376 test functions across 14/14 packages, -race clean on vcs+cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+
+### 2026-09-07 — journal #71
