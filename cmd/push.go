@@ -101,6 +101,14 @@ func runPushOut(ctx context.Context, w io.Writer) error {
 		p.Info("changes committed locally only")
 	}
 
+	// Adopt the remote's branch name while HEAD is still unborn, so the
+	// first push lands on the branch every other machine will pull.
+	if vcs.RemoteSet(dir, remoteName) {
+		if err := vcs.EnsureUnbornAligned(dir, remoteName); err != nil {
+			return fmt.Errorf("aligning branch with remote: %w", err)
+		}
+	}
+
 	// Show what's changing
 	staged, modified, untracked, err := vcs.Status(dir)
 	if err != nil {

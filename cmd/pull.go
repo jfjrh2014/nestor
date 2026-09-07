@@ -71,6 +71,12 @@ func runPullOut(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("no remote configured — set one with --remote or 'nestor remote add <url>'")
 	}
 
+	// Adopt the remote's branch name while HEAD is still unborn, so the
+	// fetched history lands on the branch both machines use (master vs main).
+	if err := vcs.EnsureUnbornAligned(dir, remoteName); err != nil {
+		return fmt.Errorf("aligning branch with remote: %w", err)
+	}
+
 	// Warn about uncommitted local changes before pulling
 	has, err := vcs.HasChanges(dir)
 	if err != nil {
