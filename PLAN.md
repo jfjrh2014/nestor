@@ -900,3 +900,12 @@ profiles:
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
 
 ### 2026-09-07 — journal #71
+### 2026-09-08 — Daily dev session #72 — no writes through symlink dests
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Bug-hunt session on the deploy engine.
+- Found by probing os.WriteFile semantics: `dotfiles.copy` and `secrets.injectOne` wrote straight into dest, and every write follows symlinks — a pre-existing link at dest (chezmoi/stow setup, an old symlink-strategy deploy, a hand-made alias) had its TARGET silently overwritten, and a dangling link made copy create a brand-new file wherever it pointed. A live link also broke Check immediately: deploy-through-link leaves dest a symlink, and Check's symlink branch reads Drifted — "drifted" the instant after deploying, with the real file corrupted underneath.
+- Fix: Lstat guards at the top of both writers — dest symlink = StatusError with an explicit "remove it or switch strategy" message, before any mkdir or write. Symlink-strategy deploys are untouched (they remove-then-link, by design).
+- Deliberate non-change: snapshot restore still writes through links — restoreIn copies the content snapshotted from the target pre-deploy, so through-the-link is the correct semantics there.
+- 6 new tests: copy refuses live link (target content asserted untouched, link intact), copy refuses dangling link (no phantom target created), copy still redeploys over regular files (guard keyed on the link, not on drift), injectOne same trio on the secrets side. First draft of the guard message referenced the wrong identifier — caught before compile, not by it.
+- 382 test functions across 14/14 packages, -race clean on dotfiles+secrets, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
