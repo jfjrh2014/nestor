@@ -182,6 +182,15 @@ func (s Status) String() string {
 func injectOne(key, val, dest, pattern string) InjectResult {
 	dest = expandHome(dest)
 
+	// Never write through a pre-existing symlink at dest: every write path in
+	// this function (WriteFile, O_APPEND open) follows links, so a link left
+	// by chezmoi/stow or a hand-made alias would have its TARGET rewritten —
+	// and a dangling one would grow a file wherever it points. Refuse loudly;
+	// removing or replacing the link is the user's call.
+	if info, err := os.Lstat(dest); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("dest %q is a symlink; remove it before injecting", dest)}
+	}
+
 	// Create dest dir if needed.
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("mkdir: %w", err)}

@@ -777,3 +777,98 @@ func TestCheckOtherUserTildeDest(t *testing.T) {
 		t.Errorf("Check(~other/.bashrc) = %s, want unsupported-dest", got)
 	}
 }
+
+// TestCopyDeployRefusesSymlinkDest: os.WriteFile follows symlinks, so a copy
+// deploy onto an existing dest symlink would silently overwrite whatever the
+// link points at (a chezmoi/stow checkout, an old symlink-strategy leftover).
+// The engine must refuse instead of writing through.
+func TestCopyDeployRefusesSymlinkDest(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(src, []byte("[user]\n\tname = marcus\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	victim := filepath.Join(dir, "real-gitconfig")
+	if err := os.WriteFile(victim, []byte("ORIGINAL\n"), 0o600); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+	dest := filepath.Join(dir, ".gitconfig")
+	if err := os.Symlink(victim, dest); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "gitconfig", Dest: dest})
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for symlink dest, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "symlink") {
+		t.Fatalf("expected symlink refusal error, got %v", r.Err)
+	}
+
+	// The link's target must be untouched and the link itself intact.
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatalf("read victim: %v", err)
+	}
+	if string(got) != "ORIGINAL\n" {
+		t.Fatalf("target file was overwritten through the link: %q", got)
+	}
+	if info, err := os.Lstat(dest); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("dest is no longer a symlink after refused deploy: %v %v", info, err)
+	}
+}
+
+// TestCopyDeployRefusesDanglingSymlinkDest: writing through a dangling link
+// doesn't fail — it silently CREATES the missing target file. The deploy must
+// refuse and nothing may appear at the link's destination path.
+func TestCopyDeployRefusesDanglingSymlinkDest(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "bashrc")
+	if err := os.WriteFile(src, []byte("export NESTOR=1\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	dest := filepath.Join(dir, ".bashrc")
+	phantom := filepath.Join(dir, "gone", ".bashrc")
+	if err := os.Symlink(phantom, dest); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "bashrc", Dest: dest})
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for dangling symlink dest, got %s", r.Status)
+	}
+	if _, err := os.Lstat(phantom); !os.IsNotExist(err) {
+		t.Fatalf("dangling link target was created: %v", err)
+	}
+}
+
+// TestCopyDeployOverwritesRegularFile: the refusal is keyed on the symlink
+// itself, not on dest content differing from src — redeploying over a plain
+// regular file still works (the standard re-run path).
+func TestCopyDeployOverwritesRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(src, []byte("v2\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, ".gitconfig")
+	if err := os.WriteFile(dest, []byte("stale\n"), 0o600); err != nil {
+		t.Fatalf("write dest: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "gitconfig", Dest: dest})
+	if r.Status != StatusDeployed {
+		t.Fatalf("expected StatusDeployed over regular file, got %s (%v)", r.Status, r.Err)
+	}
+	got, _ := os.ReadFile(dest)
+	if string(got) != "v2\n" {
+		t.Fatalf("regular-file redeploy broken: %q", got)
+	}
+}

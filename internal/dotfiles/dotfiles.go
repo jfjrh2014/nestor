@@ -97,6 +97,15 @@ func (d Deployer) Deploy(t Template) Result {
 }
 
 func (d Deployer) copy(src, dest string, t Template) Result {
+	// Never write through a pre-existing symlink at dest: WriteFile follows
+	// links, so a chezmoi/stow deployment, an old symlink-strategy leftover,
+	// or a hand-made link would have its TARGET silently overwritten — and a
+	// dangling link would create a brand-new file wherever it points. Refuse
+	// instead; removing or replacing the link is the user's call.
+	if info, err := os.Lstat(dest); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("dest %q is a symlink; remove it or switch strategy to symlink before deploying", t.Dest)}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("mkdir: %w", err)}
 	}

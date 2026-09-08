@@ -653,3 +653,72 @@ func TestReplaceAnchoredLine(t *testing.T) {
 		t.Error("expected no match when anchor absent")
 	}
 }
+
+// TestInjectOneRefusesSymlinkDest: injection opens and writes the dest
+// directly, so a pre-existing symlink at dest would have its target silently
+// rewritten (or created, if dangling). injectOne must refuse instead.
+func TestInjectOneRefusesSymlinkDest(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "real-gh-hosts")
+	if err := os.WriteFile(victim, []byte("oauth_token: old\n"), 0o600); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+	dest := filepath.Join(dir, "hosts.yml")
+	if err := os.Symlink(victim, dest); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	r := injectOne("github_token", "ghp_new", dest, "oauth_token: {{.Key}}")
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for symlink dest, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "symlink") {
+		t.Fatalf("expected symlink refusal error, got %v", r.Err)
+	}
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatalf("read victim: %v", err)
+	}
+	if string(got) != "oauth_token: old\n" {
+		t.Fatalf("target was written through the link: %q", got)
+	}
+}
+
+// TestInjectOneRefusesDanglingSymlinkDest: the O_APPEND open would happily
+// create the missing target of a dangling link. Refuse, create nothing.
+func TestInjectOneRefusesDanglingSymlinkDest(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "hosts.yml")
+	phantom := filepath.Join(dir, "gone", "hosts.yml")
+	if err := os.Symlink(phantom, dest); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	r := injectOne("github_token", "ghp_new", dest, "oauth_token: {{.Key}}")
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for dangling symlink dest, got %s", r.Status)
+	}
+	if _, err := os.Lstat(phantom); !os.IsNotExist(err) {
+		t.Fatalf("dangling link target was created: %v", err)
+	}
+}
+
+// TestInjectOneRegularFileStillWorks: the guard must not break the standard
+// first-injection and idempotent-re-injection paths on a plain file.
+func TestInjectOneRegularFileStillWorks(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "hosts.yml")
+
+	if r := injectOne("github_token", "ghp_first", dest, "oauth_token: {{.Key}}"); r.Status != StatusInjected {
+		t.Fatalf("first inject: expected StatusInjected, got %s (%v)", r.Status, r.Err)
+	}
+	if r := injectOne("github_token", "ghp_second", dest, "oauth_token: {{.Key}}"); r.Status != StatusInjected {
+		t.Fatalf("re-inject: expected StatusInjected, got %s (%v)", r.Status, r.Err)
+	}
+	got, _ := os.ReadFile(dest)
+	if string(got) != "oauth_token: ghp_second\n" {
+		t.Fatalf("rotation broken: %q", got)
+	}
+}
