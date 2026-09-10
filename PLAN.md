@@ -909,3 +909,12 @@ profiles:
 - 6 new tests: copy refuses live link (target content asserted untouched, link intact), copy refuses dangling link (no phantom target created), copy still redeploys over regular files (guard keyed on the link, not on drift), injectOne same trio on the secrets side. First draft of the guard message referenced the wrong identifier — caught before compile, not by it.
 - 382 test functions across 14/14 packages, -race clean on dotfiles+secrets, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-10 — Daily dev session #73 — sync scans through the shared installed-check
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Coverage-hunt session: scanPackages/checkPkgInstalled in cmd/sync.go at 44%/dup.
+- Found a divergent-copy bug with real consequences: sync's scanPackages probed packages with its own inline exec switch, ignoring internal/packages entirely — so a brew cask candidate was probed as `brew list --formula name` (not-installed) even when installed as a cask. Sync then wrote nothing for it while `diff` (which uses Manager.IsInstalled with sub-aware probes) reported it "extra — run 'nestor sync' to capture": the two commands contradicted each other, and following diff's advice could never capture the package.
+- Fix: deleted checkPkgInstalled; new packages.IsInstalledFunc + packages.IsInstalled (unknown manager = not-installed, nil error — scan path must not error); scanPackagesSpecs(pkgMgr, check) takes the injected func so specs (and their Sub) flow through the real backends; thin scanPackages wrapper keeps the []string contract for sync + diff.
+- 5 new tests: IsInstalled dispatch + unknown-manager contract; specs test with brew/cask: kitty pinning Sub preservation through the scan; unknown-manager scan; wrapper-mirrors-real-probe subsequence check. TestCheckPkgInstalled deleted (pinned the removed function); TestScanPackages unchanged and still green on the new path.
+- Test-draft lessons: ParseSpec keeps the full "homebrew" left side of homebrew/cask: kitty (nestor's valid alias is brew/cask:); the wrapper test can't equal an injected fake — it probes for real, so pinned subsequence-of-candidates instead.
+- 386 test functions across 14/14 packages, -race clean on packages+cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
