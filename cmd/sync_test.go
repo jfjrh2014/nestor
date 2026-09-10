@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/packages"
 )
 
 func TestCopyDotfileTemplates(t *testing.T) {
@@ -336,5 +337,66 @@ func TestCopyDotfileTemplatesKeepsEditedTemplates(t *testing.T) {
 	}
 	if string(data) != edited {
 		t.Fatalf("edited template was clobbered by re-sync:\n%q", string(data))
+	}
+}
+
+func TestScanPackagesSpecsSubPreserved(t *testing.T) {
+	// A brew candidate with an explicit sub (brew/cask) must keep its Sub
+	// through the scan: probing casks as formulas reported them not-installed
+	// and sync silently dropped them from the captured config.
+	old := devPackageCandidates["brew"]
+	devPackageCandidates["brew"] = []string{"git", "brew/cask: kitty"}
+	defer func() { devPackageCandidates["brew"] = old }()
+
+	var seen []packages.Spec
+	installed := map[string]bool{"git": true, "kitty": true}
+	specs := scanPackagesSpecs("brew", func(s packages.Spec) (bool, error) {
+		seen = append(seen, s)
+		return installed[s.Name], nil
+	})
+
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 installed specs, got %d: %+v", len(specs), specs)
+	}
+	if specs[0].Name != "git" || specs[0].Manager != "brew" || specs[0].Sub != "" {
+		t.Errorf("expected git (brew, no sub), got %+v", specs[0])
+	}
+	if specs[1].Name != "kitty" || specs[1].Manager != "brew" || specs[1].Sub != "cask" {
+		t.Errorf("expected kitty (brew, sub cask), got %+v", specs[1])
+	}
+	if len(seen) != 2 {
+		t.Errorf("expected not-installed candidates probed too, probed %d", len(seen))
+	}
+}
+
+func TestScanPackagesSpecsUnknownManager(t *testing.T) {
+	specs := scanPackagesSpecs("nope", packages.IsInstalled)
+	if len(specs) != 0 {
+		t.Errorf("unknown manager should find nothing, got %+v", specs)
+	}
+	names := scanPackages("nope")
+	if len(names) != 0 {
+		t.Errorf("wrapper should return no names for unknown manager, got %v", names)
+	}
+}
+
+func TestScanPackagesWrapperMirrorsRealProbe(t *testing.T) {
+	// The wrapper is the production path: real backend probes, names out.
+	specs := scanPackagesSpecs("apt", packages.IsInstalled)
+	names := scanPackages("apt")
+	if len(specs) != len(names) {
+		t.Fatalf("wrapper/spec mismatch: %d specs vs %d names", len(specs), len(names))
+	}
+	candidates := devPackageCandidates["apt"]
+	// names must be a subsequence of the candidate list (order preserved).
+	ci := 0
+	for _, n := range names {
+		for ci < len(candidates) && candidates[ci] != n {
+			ci++
+		}
+		if ci == len(candidates) {
+			t.Fatalf("name %q not found in candidates at or after position %d", n, ci)
+		}
+		ci++
 	}
 }

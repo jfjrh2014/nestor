@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/packages"
 	"github.com/jfjrh2014/nestor/internal/platform"
 	"github.com/jfjrh2014/nestor/internal/ui"
 	"github.com/spf13/cobra"
@@ -193,38 +193,33 @@ var devPackageCandidates = map[string][]string{
 	"snap":   {"git"},
 }
 
-func scanPackages(pkgMgr string) []string {
+func scanPackagesSpecs(pkgMgr string, check packages.IsInstalledFunc) []packages.Spec {
 	candidates, ok := devPackageCandidates[pkgMgr]
 	if !ok {
 		return nil
 	}
 
-	found := []string{}
+	found := []packages.Spec{}
 	for _, name := range candidates {
-		if checkPkgInstalled(pkgMgr, name) {
-			found = append(found, name)
+		s := packages.ParseSpec(name, pkgMgr)
+		ok, err := check(s)
+		if err != nil || !ok {
+			continue
 		}
+		found = append(found, s)
 	}
 	return found
 }
 
-func checkPkgInstalled(pkgMgr, name string) bool {
-	var cmd *exec.Cmd
-	switch pkgMgr {
-	case "apt":
-		cmd = exec.Command("dpkg", "-s", name)
-	case "brew":
-		cmd = exec.Command("brew", "list", "--formula", name)
-	case "dnf":
-		cmd = exec.Command("rpm", "-q", name)
-	case "pacman":
-		cmd = exec.Command("pacman", "-Q", name)
-	case "snap":
-		cmd = exec.Command("snap", "list", name)
-	default:
-		return false
+// scanPackages returns the names of the dev-package candidates that are
+// installed, via the same backend probe `up` and `diff` use.
+func scanPackages(pkgMgr string) []string {
+	specs := scanPackagesSpecs(pkgMgr, packages.IsInstalled)
+	names := make([]string, 0, len(specs))
+	for _, s := range specs {
+		names = append(names, s.Name)
 	}
-	return cmd.Run() == nil
+	return names
 }
 
 func scanDotfiles(home string) []config.Template {

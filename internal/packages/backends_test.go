@@ -323,3 +323,38 @@ func assertArgs(t *testing.T, got, want []string) {
 		}
 	}
 }
+
+func TestIsInstalledDispatches(t *testing.T) {
+	mr := &mockRunner{}
+	defer swapRunner(mr)()
+
+	installed, err := IsInstalled(Spec{Name: "vim", Manager: "apt"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !installed {
+		t.Error("expected installed=true when runner succeeds")
+	}
+	if len(mr.calls) != 1 {
+		t.Fatalf("expected 1 runner call, got %d", len(mr.calls))
+	}
+	if mr.calls[0].name != "dpkg" || len(mr.calls[0].args) != 2 || mr.calls[0].args[0] != "-s" || mr.calls[0].args[1] != "vim" {
+		t.Errorf("expected dpkg -s vim, got %s %v", mr.calls[0].name, mr.calls[0].args)
+	}
+}
+
+func TestIsInstalledUnknownManager(t *testing.T) {
+	mr := &mockRunner{}
+	defer swapRunner(mr)()
+
+	installed, err := IsInstalled(Spec{Name: "thing", Manager: "nope"})
+	if err != nil {
+		t.Fatalf("unknown manager must not error on the scan path: %v", err)
+	}
+	if installed {
+		t.Error("unknown manager must report not-installed")
+	}
+	if len(mr.calls) != 0 {
+		t.Errorf("unknown manager must not reach the runner, got %d calls", len(mr.calls))
+	}
+}

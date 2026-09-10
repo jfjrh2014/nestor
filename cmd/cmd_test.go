@@ -108,17 +108,6 @@ func TestScanPackages(t *testing.T) {
 	}
 }
 
-func TestCheckPkgInstalled(t *testing.T) {
-	// git is definitely installed
-	if !checkPkgInstalled("apt", "git") {
-		t.Error("git should be installed")
-	}
-	// Something that definitely isn't
-	if checkPkgInstalled("apt", "nonexistent-pkg-xyz-12345") {
-		t.Error("nonexistent package should not be installed")
-	}
-}
-
 func TestMergeStrings(t *testing.T) {
 	tests := []struct {
 		name string

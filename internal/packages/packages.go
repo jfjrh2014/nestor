@@ -82,6 +82,22 @@ func (r Resolver) Resolve(platform string) []string {
 	return out
 }
 
+// IsInstalledFunc reports whether a single spec is installed. It is the
+// probe seam: production passes IsInstalled (which dispatches to the right
+// backend), tests inject fakes.
+type IsInstalledFunc func(s Spec) (bool, error)
+
+// IsInstalled probes s through its manager's backend: exit 0 means installed.
+// An unknown manager reports not-installed rather than an error, so callers
+// that merely scan for what is present can ignore the error.
+func IsInstalled(s Spec) (bool, error) {
+	mgr, err := NewManager(s.Manager)
+	if err != nil {
+		return false, nil
+	}
+	return mgr.IsInstalled(s)
+}
+
 // Manager installs packages for a given backend.
 type Manager interface {
 	IsInstalled(s Spec) (bool, error)
