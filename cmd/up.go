@@ -321,7 +321,10 @@ func configureShell(p *ui.Printer, cfg *config.Config) {
 		return
 	}
 
-	sourceLines := shell.SourceLines(results)
+	sourceLines, unresolved := shell.SourceLines(results)
+	for _, pl := range unresolved {
+		p.Warn(fmt.Sprintf("%s: no entry file found in clone — not added to shell config", pl.Raw))
+	}
 	if err := shell.WriteSourceBlock(rcPath, sourceLines); err != nil {
 		p.Error(fmt.Sprintf("writing source block: %v", err))
 		return

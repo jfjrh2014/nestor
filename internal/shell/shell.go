@@ -139,9 +139,23 @@ func InstallPlugins(rawPlugins []string) []PluginResult {
 }
 
 // cloneURLFn resolves a plugin owner/repo pair to a git clone URL. Package
-// var so tests can point it at local fixtures instead of github.com.
+// var so tests can point it at local fixtures instead of github.com; use
+// SetCloneURLFn from other packages' tests.
 var cloneURLFn = func(owner, repo string) string {
 	return fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+}
+
+// SetCloneURLFn overrides the plugin clone URL resolver. Test seam: point it
+// at a local bare repo to exercise clone/update without network. Pass nil to
+// restore the default.
+func SetCloneURLFn(fn func(owner, repo string) string) {
+	if fn == nil {
+		cloneURLFn = func(owner, repo string) string {
+			return fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+		}
+		return
+	}
+	cloneURLFn = fn
 }
 
 func cloneOrUpdate(owner, repo, localPath string) error {
@@ -155,19 +169,43 @@ func cloneOrUpdate(owner, repo, localPath string) error {
 	return cmd.Run()
 }
 
-// SourceLines returns the shell source lines for a set of installed GitHub plugins,
-// wrapped in nestor markers. Lines are ordered deterministically.
-func SourceLines(results []PluginResult) []string {
-	var lines []string
+// resolveEntry finds the file inside a cloned plugin dir that a shell should
+// source: "<repo>.zsh" is the flat convention, "<repo>.plugin.zsh" the
+// oh-my-zsh one, and some repos ship the plugin file under a name matching
+// neither (zsh-you-should-use ships you-should-use.plugin.zsh), so fall back
+// to any single *.plugin.zsh. Ambiguous globs resolve to nothing rather than
+// guessing. Returns false when nothing resolvable exists on disk.
+func resolveEntry(dir, repo string) (string, bool) {
+	for _, name := range []string{repo + ".zsh", repo + ".plugin.zsh"} {
+		c := filepath.Join(dir, name)
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			return name, true
+		}
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "*.plugin.zsh"))
+	if len(matches) == 1 {
+		return filepath.Base(matches[0]), true
+	}
+	return "", false
+}
+
+// SourceLines returns the shell source lines for a set of installed GitHub
+// plugins, with the entry file resolved against the clone on disk. Plugins
+// whose entry file cannot be resolved come back separately so the caller can
+// warn instead of writing a source line that would fail in every future shell
+// startup. Lines are ordered deterministically.
+func SourceLines(results []PluginResult) (lines []string, unresolved []Plugin) {
 	seen := map[string]bool{}
 
 	for _, r := range results {
 		if r.Status != StatusInstalled || r.Plugin.Type != PluginGitHub {
 			continue
 		}
-		// source the plugin's main file: <path>/<repo>.plugin.zsh is the zsh convention.
-		// Fall back to sourcing the dir.
-		entry := fmt.Sprintf("%s.zsh", r.Plugin.Repo)
+		entry, ok := resolveEntry(r.Path, r.Plugin.Repo)
+		if !ok {
+			unresolved = append(unresolved, r.Plugin)
+			continue
+		}
 		sourcePath := filepath.Join(r.Path, entry)
 		line := fmt.Sprintf("source %s", sourcePath)
 		if seen[line] {
@@ -176,7 +214,7 @@ func SourceLines(results []PluginResult) []string {
 		seen[line] = true
 		lines = append(lines, line)
 	}
-	return lines
+	return lines, unresolved
 }
 
 // WriteSourceBlock reads the rc file, inserts or replaces the nestor-managed

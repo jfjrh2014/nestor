@@ -59,30 +59,94 @@ func TestRCFile(t *testing.T) {
 	}
 }
 
+// seedPlugin writes a fake cloned plugin dir with the given entry files.
+func seedPlugin(t *testing.T, base, repo string, files ...string) string {
+	t.Helper()
+	dir := filepath.Join(base, repo)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("# plugin\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 func TestSourceLines(t *testing.T) {
+	base := t.TempDir()
+	auto := seedPlugin(t, base, "zsh-autosuggestions", "zsh-autosuggestions.zsh")
+	alias := seedPlugin(t, base, "alias-tips", "alias-tips.plugin.zsh", "README.md")
+	ysu := seedPlugin(t, base, "zsh-you-should-use", "you-should-use.plugin.zsh")
+	empty := seedPlugin(t, base, "no-entry-plugin")
+
 	results := []PluginResult{
-		{Plugin: Plugin{Raw: "zsh-users/zsh-autosuggestions", Type: PluginGitHub, Owner: "zsh-users", Repo: "zsh-autosuggestions"}, Status: StatusInstalled, Path: "/fake/zsh-autosuggestions"},
+		{Plugin: Plugin{Raw: "zsh-users/zsh-autosuggestions", Type: PluginGitHub, Owner: "zsh-users", Repo: "zsh-autosuggestions"}, Status: StatusInstalled, Path: auto},
+		{Plugin: Plugin{Raw: "djui/alias-tips", Type: PluginGitHub, Owner: "djui", Repo: "alias-tips"}, Status: StatusInstalled, Path: alias},
+		{Plugin: Plugin{Raw: "MichaelAquilina/zsh-you-should-use", Type: PluginGitHub, Owner: "MichaelAquilina", Repo: "zsh-you-should-use"}, Status: StatusInstalled, Path: ysu},
+		{Plugin: Plugin{Raw: "o/no-entry-plugin", Type: PluginGitHub, Owner: "o", Repo: "no-entry-plugin"}, Status: StatusInstalled, Path: empty},
 		{Plugin: Plugin{Raw: "starship", Type: PluginNamed}, Status: StatusSkipped},
-		{Plugin: Plugin{Raw: "zsh-users/zsh-syntax-highlighting", Type: PluginGitHub, Owner: "zsh-users", Repo: "zsh-syntax-highlighting"}, Status: StatusInstalled, Path: "/fake/zsh-syntax-highlighting"},
 		{Plugin: Plugin{Raw: "failed/plugin", Type: PluginGitHub, Owner: "failed", Repo: "plugin"}, Status: StatusError},
 	}
 
-	lines := SourceLines(results)
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 source lines, got %d: %v", len(lines), lines)
+	lines, unresolved := SourceLines(results)
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 source lines, got %d: %v", len(lines), lines)
 	}
-
-	// First should be autosuggestions
-	want := "source /fake/zsh-autosuggestions/zsh-autosuggestions.zsh"
-	if lines[0] != want {
-		t.Errorf("lines[0] = %q, want %q", lines[0], want)
+	want := []string{
+		"source " + filepath.Join(auto, "zsh-autosuggestions.zsh"),
+		"source " + filepath.Join(alias, "alias-tips.plugin.zsh"),
+		"source " + filepath.Join(ysu, "you-should-use.plugin.zsh"),
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Errorf("lines[%d] = %q, want %q", i, lines[i], want[i])
+		}
+	}
+	if len(unresolved) != 1 || unresolved[0].Raw != "o/no-entry-plugin" {
+		t.Errorf("expected exactly no-entry-plugin unresolved, got %v", unresolved)
 	}
 
 	// Dedup check
 	dupResults := append(results, results[0])
-	dupLines := SourceLines(dupResults)
-	if len(dupLines) != 2 {
-		t.Errorf("dedup failed: got %d lines, expected 2", len(dupLines))
+	dupLines, dupUnresolved := SourceLines(dupResults)
+	if len(dupLines) != 3 || len(dupUnresolved) != 1 {
+		t.Errorf("dedup failed: got %d lines (%v), %d unresolved", len(dupLines), dupLines, len(dupUnresolved))
+	}
+}
+
+func TestSourceLinesAmbiguousGlobUnresolved(t *testing.T) {
+	base := t.TempDir()
+	dir := seedPlugin(t, base, "ambiguous", "a.plugin.zsh", "b.plugin.zsh")
+	results := []PluginResult{
+		{Plugin: Plugin{Raw: "o/ambiguous", Type: PluginGitHub, Owner: "o", Repo: "ambiguous"}, Status: StatusInstalled, Path: dir},
+	}
+	lines, unresolved := SourceLines(results)
+	if len(lines) != 0 {
+		t.Errorf("ambiguous glob must not guess, got lines %v", lines)
+	}
+	if len(unresolved) != 1 {
+		t.Errorf("expected unresolved report, got %v", unresolved)
+	}
+}
+
+func TestResolveEntry(t *testing.T) {
+	base := t.TempDir()
+	flat := seedPlugin(t, base, "flat", "flat.zsh")
+	omz := seedPlugin(t, base, "omz", "omz.plugin.zsh")
+
+	if name, ok := resolveEntry(flat, "flat"); !ok || name != "flat.zsh" {
+		t.Errorf("flat convention: got %q, %v", name, ok)
+	}
+	if name, ok := resolveEntry(omz, "omz"); !ok || name != "omz.plugin.zsh" {
+		t.Errorf("plugin.zsh convention: got %q, %v", name, ok)
+	}
+	// A directory named like the entry file must not resolve.
+	dirTrap := filepath.Join(base, "dirtrap")
+	os.MkdirAll(filepath.Join(dirTrap, "dirtrap.zsh"), 0o755)
+	if _, ok := resolveEntry(dirTrap, "dirtrap"); ok {
+		t.Error("directory must not resolve as entry file")
 	}
 }
 
