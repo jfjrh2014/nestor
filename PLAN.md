@@ -927,3 +927,12 @@ profiles:
 - Test-draft lessons: heredoc interpreted `\n` inside a Go string literal (a live literal newline terminated the string — repaired via targeted splice); my first cmd draft invented two seams that don't exist (`pluginsPathFn`, `RCFileForTest`) and skipped imports — rewrote around the real env seams; `cloneURLFn` is unexported, so added `SetCloneURLFn` (nil restores default) as a documented cross-package test seam; the fixture's bare repo had a dangling HEAD at `master` — clones saw an empty worktree (the #71 landmine from the other side), fixed with `git init --bare -b main`.
 - 390 test functions across 14/14 packages (+4), -race clean on shell+cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit c937c45).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-13 — Daily dev session #75 — doctor and dashboard read secrets through the profile layer
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Layer-parity sweep session: every consumer of profile config, per the recurring family (diff #59, doctor #62, secrets #63, ci #64, dashboard #65).
+- Full sweep result: list and the dashboard Secrets tab were already layered (effectiveSecretMappings); diff omitting secrets is deliberate (not status-checked). Two consumers still read base-only state: doctor's secrets section and dashSecretsProvider.
+- Bug: `doctor --profile X` on a profile that supplies the ONLY secret mappings reported "no secrets declared" — the provider check never ran on the exact run a profile-managed machine needs. With base mappings present, the count was base-only. Same gate in dashSecretsProvider: dashboard header showed "(none)" while its own Secrets tab listed the profile mappings.
+- Fix: doctor's secrets section goes through effectiveSecretMappings (unknown profile = loud error, matching doctor's other profile paths); provider check + count now see base+profile. dashSecretsProvider takes the profile name, gates "none" on effective mappings.
+- +2 doctor tests (provider check fires on profile-only mappings; base+profile count 1→2), dashboard table extended to 7 subtests (profile supplies mappings, base run still none, unknown profile falls back to none).
+- 392 test functions across 14/14 packages (+2), -race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
