@@ -186,9 +186,15 @@ func runDoctorProfileOut(ctx context.Context, profileName string, w io.Writer) e
 		}
 	}
 
-	// 5. Secrets
+	// 5. Secrets — layered like list/dashboard via effectiveSecretMappings:
+	// a profile supplying the only mappings still gets the provider check
+	// (session #75; family: list #59, doctor #62, dashboard #65).
 	p.Header("secrets")
-	if len(cfg.Secrets.Mappings) == 0 {
+	secMappings, _, secErr := effectiveSecretMappings(cfg, profileName)
+	if secErr != nil {
+		return fmt.Errorf("doctor: %w", secErr)
+	}
+	if len(secMappings) == 0 {
 		p.Info("no secrets declared")
 	} else {
 		// An empty provider is valid: NewProvider("") returns the env default.
@@ -208,7 +214,7 @@ func runDoctorProfileOut(ctx context.Context, profileName string, w io.Writer) e
 		} else {
 			p.OK(fmt.Sprintf("provider '%s' (CLI: %s) available", provName, cli))
 		}
-		p.Info(fmt.Sprintf("%d secret mapping(s) configured", len(cfg.Secrets.Mappings)))
+		p.Info(fmt.Sprintf("%d secret mapping(s) configured", len(secMappings)))
 	}
 
 	// Summary

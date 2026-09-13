@@ -382,7 +382,7 @@ func (m dashboardModel) renderOverview() string {
 
 	b.WriteString(fmt.Sprintf("  Secrets:   %d configured (%s)\n",
 		len(m.secretStatuses),
-		dashSubtleStyle.Render(dashSecretsProvider(m.cfg))))
+		dashSubtleStyle.Render(dashSecretsProvider(m.cfg, m.profile))))
 
 	if names := dashProfiles(m.cfg); len(names) > 0 {
 		if m.profile != "" {
@@ -400,9 +400,11 @@ func (m dashboardModel) renderOverview() string {
 
 // dashSecretsProvider returns the provider name for display. An empty provider
 // is valid and defaults to env (sessions #34-#36 fixed this guard in other
-// commands; this was the last display-side copy).
-func dashSecretsProvider(cfg *config.Config) string {
-	if len(cfg.Secrets.Mappings) == 0 {
+// commands; this was the last display-side copy). Effective mappings decide
+// "none": a profile supplying the only mappings is not none (session #75).
+func dashSecretsProvider(cfg *config.Config, profileName string) string {
+	mappings, _, err := effectiveSecretMappings(cfg, profileName)
+	if err != nil || len(mappings) == 0 {
 		return "none"
 	}
 	if cfg.Secrets.Provider == "" {

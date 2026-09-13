@@ -18,18 +18,32 @@ import (
 
 func TestDashSecretsProvider(t *testing.T) {
 	tests := []struct {
-		name string
-		cfg  *config.Config
-		want string
+		name    string
+		cfg     *config.Config
+		profile string
+		want    string
 	}{
-		{"empty provider, no mappings", &config.Config{Secrets: config.Secrets{}}, "none"},
-		{"empty provider, has mappings", &config.Config{Secrets: config.Secrets{Mappings: []config.Mapping{{Key: "x"}}}}, "env"},
-		{"set provider, has mappings", &config.Config{Secrets: config.Secrets{Provider: "bitwarden", Mappings: []config.Mapping{{Key: "x"}}}}, "bitwarden"},
-		{"set provider, no mappings", &config.Config{Secrets: config.Secrets{Provider: "bitwarden"}}, "none"},
+		{"empty provider, no mappings", &config.Config{Secrets: config.Secrets{}}, "", "none"},
+		{"empty provider, has mappings", &config.Config{Secrets: config.Secrets{Mappings: []config.Mapping{{Key: "x"}}}}, "", "env"},
+		{"set provider, has mappings", &config.Config{Secrets: config.Secrets{Provider: "bitwarden", Mappings: []config.Mapping{{Key: "x"}}}}, "", "bitwarden"},
+		{"set provider, no mappings", &config.Config{Secrets: config.Secrets{Provider: "bitwarden"}}, "", "none"},
+		{"profile supplies the only mappings", &config.Config{
+			Profiles: map[string]config.Profile{
+				"work": {SecretMappings: []config.Mapping{{Key: "GITHUB_TOKEN", Inject: map[string]string{"/tmp/nestor-dash-token.yml": "token"}}}},
+			},
+			Secrets: config.Secrets{Provider: "env"},
+		}, "work", "env"},
+		{"profile mappings, base run still none", &config.Config{
+			Profiles: map[string]config.Profile{
+				"work": {SecretMappings: []config.Mapping{{Key: "GITHUB_TOKEN", Inject: map[string]string{"/tmp/nestor-dash-token.yml": "token"}}}},
+			},
+			Secrets: config.Secrets{Provider: "env"},
+		}, "", "none"},
+		{"unknown profile falls back to none", &config.Config{Secrets: config.Secrets{Provider: "env", Mappings: []config.Mapping{{Key: "x"}}}}, "nope", "none"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := dashSecretsProvider(tt.cfg); got != tt.want {
+			if got := dashSecretsProvider(tt.cfg, tt.profile); got != tt.want {
 				t.Errorf("dashSecretsProvider() = %v, want %v", got, tt.want)
 			}
 		})

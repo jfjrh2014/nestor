@@ -249,3 +249,106 @@ profiles:
 		t.Fatalf("expected profile dotfile absent warning, got:\n%s", profOut.String())
 	}
 }
+
+// TestDoctorProfileSecretsProviderChecked pins the doctor side of the #75
+// sweep: a profile supplying the ONLY secret mappings must still get the
+// provider check and the mapping count. Before the fix, the secrets section
+// read base-only cfg.Secrets.Mappings, so a profile-only config reported "no
+// secrets declared" — the provider check never ran on the run that matters.
+func TestDoctorProfileSecretsProviderChecked(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "dotfiles")
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`version: 1
+dotfiles:
+  source: `+srcDir+`
+  strategy: copy
+  templates: []
+secrets:
+  provider: env
+  mappings: []
+profiles:
+  work:
+    secrets:
+      - key: GITHUB_TOKEN
+        inject:
+          `+filepath.Join(dir, "token.yml")+`: token
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	baseOut := &bytes.Buffer{}
+	if err := runDoctorProfileOut(context.Background(), "", baseOut); err != nil {
+		t.Fatalf("base doctor: %v", err)
+	}
+	if !strings.Contains(baseOut.String(), "no secrets declared") {
+		t.Fatalf("expected base run to see no secrets, got:\n%s", baseOut.String())
+	}
+
+	profOut := &bytes.Buffer{}
+	if err := runDoctorProfileOut(context.Background(), "work", profOut); err != nil {
+		t.Fatalf("profile doctor: %v", err)
+	}
+	out := profOut.String()
+	if !strings.Contains(out, "1 secret mapping(s) configured") {
+		t.Fatalf("expected profile mapping counted, got:\n%s", out)
+	}
+	if !strings.Contains(out, "provider 'env' (CLI: env) available") {
+		t.Fatalf("expected provider check to fire on profile-only mappings, got:\n%s", out)
+	}
+}
+
+// TestDoctorProfileSecretMappingCount pins the count semantics: the profile
+// layer ADDS to the base mappings (up --profile injects both), so doctor must
+// count base+profile, not one or the other.
+func TestDoctorProfileSecretMappingCount(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "dotfiles")
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`version: 1
+dotfiles:
+  source: `+srcDir+`
+  strategy: copy
+  templates: []
+secrets:
+  provider: env
+  mappings:
+    - key: AWS_KEY
+      inject:
+        `+filepath.Join(dir, "aws.yml")+`: aws
+profiles:
+  work:
+    secrets:
+      - key: GITHUB_TOKEN
+        inject:
+          `+filepath.Join(dir, "token.yml")+`: token
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	baseOut := &bytes.Buffer{}
+	if err := runDoctorProfileOut(context.Background(), "", baseOut); err != nil {
+		t.Fatalf("base doctor: %v", err)
+	}
+	if !strings.Contains(baseOut.String(), "1 secret mapping(s) configured") {
+		t.Fatalf("expected base-only count of 1, got:\n%s", baseOut.String())
+	}
+
+	profOut := &bytes.Buffer{}
+	if err := runDoctorProfileOut(context.Background(), "work", profOut); err != nil {
+		t.Fatalf("profile doctor: %v", err)
+	}
+	if !strings.Contains(profOut.String(), "2 secret mapping(s) configured") {
+		t.Fatalf("expected layered count of 2, got:\n%s", profOut.String())
+	}
+}
