@@ -28,34 +28,71 @@ Examples:
 }
 
 func init() {
+	addCmd.Flags().StringVarP(&addProfileFlag, "profile", "p", "", "add to a named profile instead of the common/base sections")
 	rootCmd.AddCommand(addCmd)
 }
 
+// addProfileFlag names the profile that 'nestor add --profile' targets.
+var addProfileFlag string
+
 func runAdd(kind, name string) error {
-	return runAddIO(kind, name, os.Stdin, os.Stdout)
+	return runAddIO(kind, name, addProfileFlag, os.Stdin, os.Stdout)
 }
 
-func runAddIO(kind, name string, in io.Reader, out io.Writer) error {
+func runAddIO(kind, name, profileName string, in io.Reader, out io.Writer) error {
 	switch kind {
 	case "package", "pkg":
-		return addPackage(name, out)
+		return addPackage(name, profileName, out)
 	case "dotfile", "dot":
-		return addDotfile(name, out)
+		return addDotfile(name, profileName, out)
 	case "secret":
-		return addSecret(name, in, out)
+		return addSecret(name, profileName, in, out)
 	default:
 		return fmt.Errorf("unknown type %q — use package, dotfile, or secret", kind)
 	}
 }
 
-func addPackage(name string, out io.Writer) error {
+// resolveAddTarget loads the config for an add operation and returns it with
+// the validated target profile name ("" = base sections). An unknown profile
+// is a hard error before anything is written: profile targeting steers items
+// into profiles.<name>, which only exists if the user declared it.
+func resolveAddTarget(profileName string) (*config.Config, string, error) {
+	path := configPath()
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("add: %w", err)
+	}
+	if profileName != "" && !cfg.ValidProfile(profileName) {
+		return nil, "", fmt.Errorf("add: unknown profile %q — define profiles.%s in %s first", profileName, profileName, path)
+	}
+	return cfg, profileName, nil
+}
+
+func addPackage(name, profileName string, out io.Writer) error {
 	if name == "" {
 		return fmt.Errorf("add package: name is required")
 	}
 	path := configPath()
-	cfg, err := config.Load(path)
+	cfg, profileName, err := resolveAddTarget(profileName)
 	if err != nil {
 		return fmt.Errorf("add package: %w", err)
+	}
+
+	if profileName != "" {
+		prof := cfg.Profiles[profileName]
+		for _, p := range prof.Packages {
+			if p == name {
+				fmt.Fprintf(out, "nestor: %s already in profile %s packages\n", name, profileName)
+				return nil
+			}
+		}
+		prof.Packages = append(prof.Packages, name)
+		cfg.Profiles[profileName] = prof
+		if err := writeConfig(path, cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "nestor: added package %q to profile %s\n", name, profileName)
+		return nil
 	}
 
 	// Check if already declared
@@ -75,12 +112,12 @@ func addPackage(name string, out io.Writer) error {
 	return nil
 }
 
-func addDotfile(name string, out io.Writer) error {
+func addDotfile(name, profileName string, out io.Writer) error {
 	if name == "" {
 		return fmt.Errorf("add dotfile: name is required")
 	}
 	path := configPath()
-	cfg, err := config.Load(path)
+	cfg, profileName, err := resolveAddTarget(profileName)
 	if err != nil {
 		return fmt.Errorf("add dotfile: %w", err)
 	}
@@ -100,6 +137,25 @@ func addDotfile(name string, out io.Writer) error {
 
 	// Check for duplicate destination — validate() rejects dup dests, so
 	// writing one here would brick every subsequent config load.
+	if profileName != "" {
+		prof := cfg.Profiles[profileName]
+		for _, t := range prof.Dotfiles {
+			if t.Dest == name {
+				fmt.Fprintf(out, "nestor: dotfile %s already in profile %s (src: %s)\n", name, profileName, t.Src)
+				return nil
+			}
+		}
+		prof.Dotfiles = append(prof.Dotfiles, config.Template{
+			Src:  srcName,
+			Dest: name, // keep original (with ~ if provided)
+		})
+		cfg.Profiles[profileName] = prof
+		if err := writeConfig(path, cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "nestor: added dotfile %s to profile %s → src: %s\n", name, profileName, srcName)
+		return nil
+	}
 	for _, t := range cfg.Dotfiles.Templates {
 		if t.Dest == name {
 			fmt.Fprintf(out, "nestor: dotfile %s already in config (src: %s)\n", name, t.Src)
@@ -121,12 +177,12 @@ func addDotfile(name string, out io.Writer) error {
 	return nil
 }
 
-func addSecret(name string, in io.Reader, out io.Writer) error {
+func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 	if name == "" {
 		return fmt.Errorf("add secret: name is required")
 	}
 	path := configPath()
-	cfg, err := config.Load(path)
+	cfg, profileName, err := resolveAddTarget(profileName)
 	if err != nil {
 		return fmt.Errorf("add secret: %w", err)
 	}
@@ -138,6 +194,27 @@ func addSecret(name string, in io.Reader, out io.Writer) error {
 
 	// Check for duplicate key — a second entry with the same key is almost
 	// always a mistake and would cause ResolveAll to overwrite silently.
+	if profileName != "" {
+		prof := cfg.Profiles[profileName]
+		for _, m := range prof.SecretMappings {
+			if m.Key == name {
+				fmt.Fprintf(out, "nestor: secret %q already in profile %s\n", name, profileName)
+				return nil
+			}
+		}
+		dest, pattern := promptInjectTarget(name, in, out)
+		inject := map[string]string{}
+		if dest != "" && pattern != "" {
+			inject[dest] = pattern
+		}
+		prof.SecretMappings = append(prof.SecretMappings, config.Mapping{Key: name, Inject: inject})
+		cfg.Profiles[profileName] = prof
+		if err := writeConfig(path, cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "nestor: added secret %q to profile %s\n", name, profileName)
+		return nil
+	}
 	for _, m := range cfg.Secrets.Mappings {
 		if m.Key == name {
 			fmt.Fprintf(out, "nestor: secret %q already in config\n", name)

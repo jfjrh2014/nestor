@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,7 @@ func TestAddPackage(t *testing.T) {
 	defer func() { cfgFile = "" }()
 
 	var out bytes.Buffer
-	if err := addPackage("ripgrep", &out); err != nil {
+	if err := addPackage("ripgrep", "", &out); err != nil {
 		t.Fatalf("addPackage: %v", err)
 	}
 
@@ -67,7 +68,7 @@ func TestAddPackageDuplicate(t *testing.T) {
 	defer func() { cfgFile = "" }()
 
 	var out bytes.Buffer
-	if err := addPackage("git", &out); err != nil {
+	if err := addPackage("git", "", &out); err != nil {
 		t.Fatalf("addPackage: %v", err)
 	}
 	if !strings.Contains(out.String(), "already in common") {
@@ -98,7 +99,7 @@ func TestAddDotfile(t *testing.T) {
 	defer func() { cfgFile = "" }()
 
 	var out bytes.Buffer
-	if err := addDotfile("~/.bashrc", &out); err != nil {
+	if err := addDotfile("~/.bashrc", "", &out); err != nil {
 		t.Fatalf("addDotfile: %v", err)
 	}
 
@@ -122,11 +123,11 @@ func TestAddDotfileDuplicate(t *testing.T) {
 	defer func() { cfgFile = "" }()
 
 	var out bytes.Buffer
-	if err := addDotfile("~/.bashrc", &out); err != nil {
+	if err := addDotfile("~/.bashrc", "", &out); err != nil {
 		t.Fatalf("first addDotfile: %v", err)
 	}
 	out.Reset()
-	if err := addDotfile("~/.bashrc", &out); err != nil {
+	if err := addDotfile("~/.bashrc", "", &out); err != nil {
 		t.Fatalf("second addDotfile: %v", err)
 	}
 	if !strings.Contains(out.String(), "already in config") {
@@ -153,7 +154,7 @@ func TestAddSecretWithTarget(t *testing.T) {
 	// Simulate user providing a dest path and accepting the default pattern
 	input := "~/.config/gh/hosts.yml\n\n"
 	var out bytes.Buffer
-	if err := addSecret("github_token", strings.NewReader(input), &out); err != nil {
+	if err := addSecret("github_token", "", strings.NewReader(input), &out); err != nil {
 		t.Fatalf("addSecret: %v", err)
 	}
 
@@ -184,7 +185,7 @@ func TestAddSecretSkipTarget(t *testing.T) {
 	// User skips the inject target prompt
 	input := "\n"
 	var out bytes.Buffer
-	if err := addSecret("api_key", strings.NewReader(input), &out); err != nil {
+	if err := addSecret("api_key", "", strings.NewReader(input), &out); err != nil {
 		t.Fatalf("addSecret: %v", err)
 	}
 	if !strings.Contains(out.String(), "no injection target set") {
@@ -211,14 +212,14 @@ func TestAddSecretDuplicate(t *testing.T) {
 	// First add with a target
 	input := "~/.env\nAPI_KEY={{.api_key}}\n"
 	var out bytes.Buffer
-	if err := addSecret("api_key", strings.NewReader(input), &out); err != nil {
+	if err := addSecret("api_key", "", strings.NewReader(input), &out); err != nil {
 		t.Fatalf("first addSecret: %v", err)
 	}
 
 	// Second add of same key
 	out.Reset()
 	input = "\n"
-	if err := addSecret("api_key", strings.NewReader(input), &out); err != nil {
+	if err := addSecret("api_key", "", strings.NewReader(input), &out); err != nil {
 		t.Fatalf("second addSecret: %v", err)
 	}
 	if !strings.Contains(out.String(), "already in config") {
@@ -284,7 +285,7 @@ func TestAddPackageEmptyName(t *testing.T) {
 	defer func() { cfgFile = "" }()
 
 	var out bytes.Buffer
-	err := addPackage("", &out)
+	err := addPackage("", "", &out)
 	if err == nil {
 		t.Fatal("expected error for empty package name, got nil")
 	}
@@ -310,7 +311,7 @@ func TestAddDotfileEmptyName(t *testing.T) {
 	defer func() { cfgFile = "" }()
 
 	var out bytes.Buffer
-	err := addDotfile("", &out)
+	err := addDotfile("", "", &out)
 	if err == nil {
 		t.Fatal("expected error for empty dotfile name, got nil")
 	}
@@ -334,7 +335,7 @@ func TestAddSecretEmptyName(t *testing.T) {
 	defer func() { cfgFile = "" }()
 
 	var out bytes.Buffer
-	err := addSecret("", strings.NewReader("\n"), &out)
+	err := addSecret("", "", strings.NewReader("\n"), &out)
 	if err == nil {
 		t.Fatal("expected error for empty secret name, got nil")
 	}
@@ -345,4 +346,115 @@ func TestAddSecretEmptyName(t *testing.T) {
 	if len(cfg.Secrets.Mappings) != 0 {
 		t.Errorf("expected 0 mappings, got %d", len(cfg.Secrets.Mappings))
 	}
+}
+
+// TestAddPackageProfile is the regression for session #76: profile targeting
+// had no CLI path at all, so machine-specific packages could only be added
+// by hand-editing YAML. 'nestor add package jq --profile work' must land in
+// profiles.work.packages, never in the common list.
+func TestAddPackageProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	appendProfilesSection(t, cfgPath, "work")
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	if err := addPackage("jq", "work", &out); err != nil {
+		t.Fatalf("addPackage profile: %v", err)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load after add: %v", err)
+	}
+	found := false
+	for _, p := range cfg.Profiles["work"].Packages {
+		if p == "jq" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("jq not in profile work packages; config:\n%s", func() string { b, _ := os.ReadFile(cfgPath); return string(b) }())
+	}
+	for _, p := range cfg.Packages.Common {
+		if p == "jq" {
+			t.Error("jq leaked into common packages")
+		}
+	}
+
+	// Duplicate: second add is a no-op with a profile-specific message.
+	var dup bytes.Buffer
+	if err := addPackage("jq", "work", &dup); err != nil {
+		t.Fatalf("duplicate addPackage: %v", err)
+	}
+	if !strings.Contains(dup.String(), "already in profile work") {
+		t.Errorf("expected duplicate message, got: %s", dup.String())
+	}
+}
+
+// TestAddPackageUnknownProfile pins the early-error contract: an unknown
+// profile must fail BEFORE anything is written (a typo must never create a
+// config section the user did not declare).
+func TestAddPackageUnknownProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	before, _ := os.ReadFile(cfgPath)
+	var out bytes.Buffer
+	err := addPackage("jq", "nope", &out)
+	if err == nil {
+		t.Fatal("expected error for unknown profile")
+	}
+	if !strings.Contains(err.Error(), "unknown profile") {
+		t.Errorf("error should name the unknown profile, got: %v", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config file was modified despite unknown-profile error")
+	}
+}
+
+// TestAddSecretProfile pins the profile branch of secret addition: the
+// mapping must land in profiles.<name>.secrets with the prompted inject
+// target, so 'up --profile' resolves it.
+func TestAddSecretProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	appendProfilesSection(t, cfgPath, "work")
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	input := "~/.workrc\n{{ .github_token }}\n"
+	var out bytes.Buffer
+	if err := addSecret("ghp", "work", strings.NewReader(input), &out); err != nil {
+		t.Fatalf("addSecret profile: %v", err)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load after add: %v", err)
+	}
+	ms := cfg.Profiles["work"].SecretMappings
+	if len(ms) != 1 || ms[0].Key != "ghp" {
+		t.Fatalf("profile work secret mappings = %+v, want one ghp mapping", ms)
+	}
+	if dest, ok := ms[0].Inject["~/.workrc"]; !ok || dest != "{{ .github_token }}" {
+		t.Errorf("inject = %v, want ~/.workrc -> {{ .github_token }}", ms[0].Inject)
+	}
+}
+
+func appendProfilesSection(t *testing.T, path, name string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "profiles:\n  %s:\n    packages: []\n", name)
 }

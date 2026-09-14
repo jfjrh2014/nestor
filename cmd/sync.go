@@ -27,11 +27,37 @@ Useful for bootstrapping nestor from an existing setup.`,
 }
 
 func init() {
+	syncCmd.Flags().StringVarP(&syncProfileFlag, "profile", "p", "", "capture scanned items into a named profile instead of the common sections")
 	rootCmd.AddCommand(syncCmd)
 }
 
+// syncProfileFlag names the profile that 'nestor sync --profile' captures
+// scanned packages and dotfiles into.
+var syncProfileFlag string
+
 func runSync(ctx context.Context) error {
-	p := ui.New(os.Stdout)
+	return runSyncOut(ctx, syncProfileFlag, os.Stdout)
+}
+
+func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
+	p := ui.New(w)
+
+	// A profile capture needs an existing, valid profile to land in: sync
+	// must never invent config sections the user did not declare, and the
+	// error has to fire BEFORE any scanning so a typo costs nothing.
+	if profileName != "" {
+		path := configPath()
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("sync --profile %s: no config at %s — run 'nestor sync' without --profile first to create one", profileName, path)
+		}
+		pre, err := config.Load(path)
+		if err != nil {
+			return fmt.Errorf("sync --profile %s: %w", profileName, err)
+		}
+		if !pre.ValidProfile(profileName) {
+			return fmt.Errorf("sync: unknown profile %q — define profiles.%s in %s first", profileName, profileName, path)
+		}
+	}
 
 	// Detect platform
 	p.Header("platform")
@@ -100,8 +126,7 @@ func runSync(ctx context.Context) error {
 	}
 	if existing != nil {
 		p.Warn(fmt.Sprintf("config already exists at %s — merging", outPath))
-		existing.Packages.Common = mergeStrings(existing.Packages.Common, foundPkgs)
-		existing.Dotfiles.Templates = mergeDotfiles(existing.Dotfiles.Templates, foundDots)
+		applyScanToConfig(existing, profileName, foundPkgs, foundDots)
 		// Preserve the freshly-computed source dir if the existing config has
 		// none — otherwise the merged config points at templates with no source.
 		if existing.Dotfiles.Source == "" {
@@ -148,9 +173,30 @@ func runSync(ctx context.Context) error {
 	if writeErr := os.WriteFile(outPath, data, 0o644); writeErr != nil {
 		return fmt.Errorf("sync: %w", writeErr)
 	}
-	p.OK(fmt.Sprintf("config written to %s", outPath))
+	if profileName != "" {
+		p.OK(fmt.Sprintf("config written to %s (scanned items captured into profile %s)", outPath, profileName))
+	} else {
+		p.OK(fmt.Sprintf("config written to %s", outPath))
+	}
 
 	return nil
+}
+
+// applyScanToConfig merges scanned packages and dotfiles into cfg, targeting
+// the named profile's sections when profileName is set ("" = the common
+// sections, the historical behavior). Profile capture is what makes
+// 'nestor diff --profile X' advice converge: its "extra" items are machine
+// specific, and steering them into common would deploy them everywhere.
+func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []string, foundDots []config.Template) {
+	if profileName != "" {
+		prof := cfg.Profiles[profileName]
+		prof.Packages = mergeStrings(prof.Packages, foundPkgs)
+		prof.Dotfiles = mergeDotfiles(prof.Dotfiles, foundDots)
+		cfg.Profiles[profileName] = prof
+		return
+	}
+	cfg.Packages.Common = mergeStrings(cfg.Packages.Common, foundPkgs)
+	cfg.Dotfiles.Templates = mergeDotfiles(cfg.Dotfiles.Templates, foundDots)
 }
 
 // loadExistingForSync returns the parsed existing config at path, or nil when

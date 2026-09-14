@@ -126,8 +126,8 @@ func runDiffOut(ctx context.Context, profileName string, w io.Writer) error {
 	} else if len(specs) == 0 && extra == 0 {
 		p.Info("no packages declared")
 	}
-	if extra > 0 {
-		p.Info(fmt.Sprintf("%d extra package(s) not tracked — run 'nestor sync' to capture", extra))
+	if advice := syncCaptureAdvice(profileName, extra); advice != "" {
+		p.Info(advice)
 	}
 
 	// --- dotfiles ---
@@ -187,6 +187,21 @@ func runDiffOut(ctx context.Context, profileName string, w io.Writer) error {
 	}
 
 	return nil
+}
+
+// syncCaptureAdvice builds the drift-capture advice for extra packages.
+// Under --profile, the items are machine specific: plain 'nestor sync'
+// would file them into the common sections and deploy them everywhere, so
+// the advice names the profile-capture form instead. Returns "" when there
+// is nothing extra to capture.
+func syncCaptureAdvice(profileName string, extra int) string {
+	if extra == 0 {
+		return ""
+	}
+	if profileName != "" {
+		return fmt.Sprintf("%d extra package(s) not tracked — run 'nestor sync --profile %s' to capture into the profile", extra, profileName)
+	}
+	return fmt.Sprintf("%d extra package(s) not tracked — run 'nestor sync' to capture", extra)
 }
 
 // untrackedPackages returns installed package names not present in configured,

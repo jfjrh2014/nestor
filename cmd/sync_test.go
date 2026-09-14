@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -398,5 +399,138 @@ func TestScanPackagesWrapperMirrorsRealProbe(t *testing.T) {
 			t.Fatalf("name %q not found in candidates at or after position %d", n, ci)
 		}
 		ci++
+	}
+}
+
+// TestSyncProfileCapture is the regression for session #76: 'nestor diff
+// --profile X' told users to run 'nestor sync' for extra packages, but sync
+// merged everything into the COMMON sections — following the advice turned
+// machine-specific extras into globally deployed packages. With --profile,
+// sync must land scanned items in the profile sections instead.
+func TestSyncProfileCapture(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // Windows
+	cfgDir := filepath.Join(home, ".config", "nestor")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(cfgDir, "nestor.yml")
+	cfgContent := `version: 1
+packages:
+  common:
+    - git
+dotfiles:
+  source: ` + filepath.Join(home, "dotfiles") + `
+  strategy: copy
+  templates: []
+secrets:
+  provider: env
+  mappings: []
+profiles:
+  work:
+    packages: [vim]
+`
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	existing, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load existing: %v", err)
+	}
+	applyScanToConfig(existing, "work", []string{"jq", "fzf"}, nil)
+	data, err := config.Marshal(existing)
+	if err != nil {
+		t.Fatalf("marshal merged config: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload merged config: %v", err)
+	}
+	got := merged.Profiles["work"].Packages
+	if len(got) != 3 || got[0] != "vim" || got[1] != "jq" || got[2] != "fzf" {
+		t.Errorf("profile work packages = %v, want [vim jq fzf]", got)
+	}
+	for _, p := range merged.Packages.Common {
+		if p == "jq" || p == "fzf" {
+			t.Errorf("scanned package %q leaked into common packages: %v", p, merged.Packages.Common)
+		}
+	}
+}
+
+// TestSyncCaptureAdvice pins the advice contract in diff: with a profile
+// active, "run 'nestor sync'" would file machine-specific extras into the
+// common sections, so the advice must name the profile-capture form.
+func TestSyncCaptureAdvice(t *testing.T) {
+	if got := syncCaptureAdvice("", 0); got != "" {
+		t.Errorf("no extras: got %q, want empty", got)
+	}
+	base := syncCaptureAdvice("", 2)
+	if !strings.Contains(base, "run 'nestor sync' to capture") || !strings.Contains(base, "2") {
+		t.Errorf("base advice = %q, want count + plain sync advice", base)
+	}
+	prof := syncCaptureAdvice("work", 2)
+	if !strings.Contains(prof, "sync --profile work") || !strings.Contains(prof, "into the profile") {
+		t.Errorf("profile advice = %q, want profile-capture form", prof)
+	}
+}
+
+// TestSyncOutProfileUnknownErrorsBeforeScanning pins the early-error
+// contract: a typo'd profile must fail before any scanning or writing.
+func TestSyncOutProfileUnknownErrorsBeforeScanning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfgDir := filepath.Join(home, ".config", "nestor")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(cfgDir, "nestor.yml")
+	if err := os.WriteFile(cfgPath, []byte("version: 1\npackages:\n  common: []\ndotfiles:\n  strategy: copy\nsecrets:\n  provider: env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(cfgPath)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out strings.Builder
+	err := runSyncOut(context.Background(), "nope", &out)
+	if err == nil {
+		t.Fatal("expected unknown-profile error")
+	}
+	if !strings.Contains(err.Error(), "unknown profile") {
+		t.Errorf("error should name the unknown profile, got: %v", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config was modified despite unknown-profile error")
+	}
+}
+
+// TestSyncOutProfileNoConfig pins the fresh-machine contract: --profile
+// without an existing config must say to run plain 'nestor sync' first,
+// not silently create a config with a profile section the user never wrote.
+func TestSyncOutProfileNoConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfgFile = ""
+	var out strings.Builder
+	err := runSyncOut(context.Background(), "work", &out)
+	if err == nil {
+		t.Fatal("expected no-config error")
+	}
+	if !strings.Contains(err.Error(), "no config") {
+		t.Errorf("error should point at the missing config, got: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".config", "nestor", "nestor.yml")); statErr == nil {
+		t.Error("config was created despite the no-config error path")
 	}
 }
