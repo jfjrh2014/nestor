@@ -936,3 +936,12 @@ profiles:
 - +2 doctor tests (provider check fires on profile-only mappings; base+profile count 1→2), dashboard table extended to 7 subtests (profile supplies mappings, base run still none, unknown profile falls back to none).
 - 392 test functions across 14/14 packages (+2), -race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-14 — Daily dev session #76 — sync/add capture into profiles
+
+- v0.1 still blocked: standing blocker (no `workflow` scope on the token). Bug-hunt session, started from the coverage list (runX glue at 0% is exempt).
+- Found by following diff's own advice: 'nestor diff --profile X' reports machine-specific extras as "extra — run 'nestor sync' to capture", but sync merges everything into the COMMON sections. Following the advice deploys the extras on every machine — the opposite of what a profile-scoped diff means. No CLI path captured into a profile at all; add had the same hole (packages only via hand-edited YAML).
+- Fix: 'nestor sync --profile X' captures scanned packages/dotfiles into profiles.X (unknown profile or missing config = loud error BEFORE any scanning, config never modified); 'nestor add package|dotfile|secret --profile X' targets the profile sections with the same duplicate guards the base paths have (per-section dup validation means no brick risk); diff's advice under --profile now reads "run 'nestor sync --profile X' to capture into the profile" (extracted as syncCaptureAdvice, pinned pure).
+- 7 new tests: profile capture through the merge (items in profiles.work, nothing leaked to common), unknown-profile early error (config byte-identical after), no-config error path, add package profile + duplicate + unknown-profile (file untouched), add secret profile with inject target, advice contract ("" / plain / profile forms).
+- Test-draft lesson: invented a nonsense Marshal(cfgPath) guard line — vet caught it before the suite ran.
+- 399 test functions across 14/14 packages (+7), -race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit 00f1156).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
