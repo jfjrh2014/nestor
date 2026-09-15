@@ -345,3 +345,76 @@ func TestPushPullCrossMachineBranchAlignment(t *testing.T) {
 		t.Errorf("remote masterlocal should hold B's edit (got %q, err %v)", string(out), err)
 	}
 }
+
+// TestPushHealsDanglingRemoteHead is the session #77 command-level
+// regression: after a mismatched first push the remote HEAD dangles at a
+// branch name the push never created (invisible to nestor before the
+// fix); push now repairs it where the remote is directly reachable and
+// warns with the remedy where it is not (the hosted case). A healthy
+// remote stays silent.
+func TestPushHealsDanglingRemoteHead(t *testing.T) {
+	skipIfNoGit(t)
+	ctx := context.Background()
+
+	seedConfig := func(t *testing.T) {
+		t.Helper()
+		cfgPath := filepath.Join(os.Getenv("HOME"), ".config", "nestor", "nestor.yml")
+		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cfgPath, []byte("config: FROM-A\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("path-local remote is healed silently", func(t *testing.T) {
+		setInitDefaultBranch(t, "masterlocal")
+		remote := bareRemoteWithHead(t)
+		isolatedConfigHome(t)
+		seedConfig(t)
+		pushRemoteURL = remote
+		defer func() { pushRemoteURL = "" }()
+		var buf bytes.Buffer
+		if err := runPushOut(ctx, &buf); err != nil {
+			t.Fatalf("push: %v\n%s", err, buf.String())
+		}
+		if strings.Contains(buf.String(), "dangling") {
+			t.Errorf("push should heal a path-local remote without warning:\n%s", buf.String())
+		}
+		if out, err := exec.Command("git", "-C", remote, "symbolic-ref", "--short", "HEAD").Output(); err != nil || strings.TrimSpace(string(out)) != "masterlocal" {
+			t.Errorf("remote HEAD = %q (err %v), want masterlocal", string(out), err)
+		}
+	})
+
+	t.Run("hosted-style URL warns with remedy", func(t *testing.T) {
+		setInitDefaultBranch(t, "masterlocal")
+		remote := bareRemoteWithHead(t)
+		isolatedConfigHome(t)
+		seedConfig(t)
+		pushRemoteURL = "file://" + remote // scheme URL: out of heal reach, same dangling outcome
+		defer func() { pushRemoteURL = "" }()
+		var buf bytes.Buffer
+		if err := runPushOut(ctx, &buf); err != nil {
+			t.Fatalf("push: %v\n%s", err, buf.String())
+		}
+		if !strings.Contains(buf.String(), "dangling") {
+			t.Errorf("push should warn when a dangling remote HEAD cannot be healed:\n%s", buf.String())
+		}
+	})
+
+	t.Run("healthy remote stays silent", func(t *testing.T) {
+		setInitDefaultBranch(t, "main")
+		remote := bareRemoteWithHead(t) // HEAD main == client default: healthy after push
+		isolatedConfigHome(t)
+		seedConfig(t)
+		pushRemoteURL = remote
+		defer func() { pushRemoteURL = "" }()
+		var buf bytes.Buffer
+		if err := runPushOut(ctx, &buf); err != nil {
+			t.Fatalf("push: %v\n%s", err, buf.String())
+		}
+		if strings.Contains(buf.String(), "dangling") {
+			t.Errorf("healthy remote should not trigger the dangling warning:\n%s", buf.String())
+		}
+	})
+}

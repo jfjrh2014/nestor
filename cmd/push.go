@@ -132,6 +132,15 @@ func runPushOut(ctx context.Context, w io.Writer) error {
 			return fmt.Errorf("push (commit succeeded): %w", err)
 		}
 		p.OK("pushed to remote")
+		// A first push to a fresh bare remote can leave its HEAD dangling
+		// at a branch name the push never created (init defaults differ
+		// across machines). Heal it where the remote is reachable directly,
+		// so later clones check out work instead of an empty tree.
+		if status, healErr := vcs.HealRemoteHEAD(dir, remoteName); healErr != nil {
+			p.Warn(fmt.Sprintf("remote HEAD left dangling — fresh clones will check out nothing: %v", healErr))
+		} else if status != "" {
+			p.Warn("remote HEAD left dangling — fresh clones will check out nothing. " + status)
+		}
 	} else {
 		p.OK("committed locally (no remote configured)")
 	}

@@ -569,3 +569,124 @@ func TestPullUnbornEmptyRemoteStillFails(t *testing.T) {
 		t.Error("Pull from an empty remote should fail")
 	}
 }
+
+// TestDanglingRemoteHEADAfterMismatchedFirstPush is the session #77
+// regression: a machine whose git default (masterlocal) commits offline
+// and pushes first to a GitHub-style bare remote (HEAD at main) leaves
+// the remote HEAD dangling — and before the fix that state was invisible
+// to nestor. Detection must flag it; over path-local transports the
+// symref does not resolve, so the "no advertised ref but real branches
+// exist" shape is the signal.
+func TestDanglingRemoteHEADAfterMismatchedFirstPush(t *testing.T) {
+	remote := initRemoteRepo(t)
+	if remote == "" {
+		return
+	}
+	// GitHub forces HEAD to main on new empty repos regardless of what
+	// the pushing client calls its branch.
+	if out, err := exec.Command("git", "-C", remote, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("setting remote HEAD to main: %v (%s)", err, out)
+	}
+	setBranchNames(t, "masterlocal")
+
+	// Healthy when empty: zero branches is the unactionable kind.
+	if dangling, advertised := DanglingRemoteHEAD(t.TempDir(), remote); dangling || advertised != "" {
+		t.Fatalf("empty remote reported dangling=%v advertised=%q, want false/\"\"", dangling, advertised)
+	}
+
+	// Machine A commits offline on its own default, THEN meets the remote.
+	machineA := t.TempDir()
+	if err := Init(machineA); err != nil {
+		t.Fatalf("Init A failed: %v", err)
+	}
+	commitFile(t, machineA, "nestor.yml", "config: FROM-A\n", "offline commit")
+	if err := SetRemote(machineA, "origin", remote); err != nil {
+		t.Fatalf("SetRemote A failed: %v", err)
+	}
+	if err := Push(machineA, "origin"); err != nil {
+		t.Fatalf("Push A failed: %v", err)
+	}
+
+	dangling, advertised := DanglingRemoteHEAD(machineA, "origin")
+	if !dangling {
+		t.Fatal("mismatched first push left remote HEAD dangling, but DanglingRemoteHEAD reported healthy")
+	}
+	if advertised != "" {
+		t.Errorf("path-local transport should not resolve the symref, got advertised %q", advertised)
+	}
+}
+
+// TestHealRemoteHEADFixesPathLocalRemote replays the mismatched first
+// push, heals the remote directly, and proves the cure on both consumers:
+// a plain git clone checks out A's work, and a nestor pull lands on the
+// same branch. Before the heal, the clone checks out nothing.
+func TestHealRemoteHEADFixesPathLocalRemote(t *testing.T) {
+	remote := initRemoteRepo(t)
+	if remote == "" {
+		return
+	}
+	if out, err := exec.Command("git", "-C", remote, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("setting remote HEAD to main: %v (%s)", err, out)
+	}
+	setBranchNames(t, "masterlocal")
+
+	machineA := t.TempDir()
+	if err := Init(machineA); err != nil {
+		t.Fatalf("Init A failed: %v", err)
+	}
+	commitFile(t, machineA, "nestor.yml", "config: FROM-A\n", "offline commit")
+	if err := SetRemote(machineA, "origin", remote); err != nil {
+		t.Fatalf("SetRemote A failed: %v", err)
+	}
+	if err := Push(machineA, "origin"); err != nil {
+		t.Fatalf("Push A failed: %v", err)
+	}
+	if dangling, _ := DanglingRemoteHEAD(machineA, "origin"); !dangling {
+		t.Fatal("expected dangling remote HEAD before heal")
+	}
+
+	// Before healing, a git-native clone of the remote checks out nothing.
+	cloneBefore := filepath.Join(t.TempDir(), "clone-before")
+	if out, err := exec.Command("git", "clone", "-q", remote, cloneBefore).CombinedOutput(); err != nil {
+		t.Fatalf("clone before heal: %v (%s)", err, out)
+	}
+	if _, statErr := os.Stat(filepath.Join(cloneBefore, "nestor.yml")); !os.IsNotExist(statErr) {
+		t.Errorf("clone before heal should have no worktree files, stat err = %v", statErr)
+	}
+
+	if _, healErr := HealRemoteHEAD(machineA, "origin"); healErr != nil {
+		t.Fatalf("HealRemoteHEAD: %v", healErr)
+	}
+	if dangling, _ := DanglingRemoteHEAD(machineA, "origin"); dangling {
+		t.Error("remote HEAD still dangling after heal")
+	}
+
+	// Cure, consumer 1: a fresh git clone checks out A's work.
+	cloneAfter := filepath.Join(t.TempDir(), "clone-after")
+	if out, err := exec.Command("git", "clone", "-q", remote, cloneAfter).CombinedOutput(); err != nil {
+		t.Fatalf("clone after heal: %v (%s)", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(cloneAfter, "nestor.yml"))
+	if err != nil {
+		t.Fatalf("clone after heal missing nestor.yml: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "config: FROM-A" {
+		t.Errorf("clone after heal holds %q", string(data))
+	}
+
+	// Cure, consumer 2: nestor pull on a fresh machine lands on A's branch.
+	machineB := t.TempDir()
+	if err := Init(machineB); err != nil {
+		t.Fatalf("Init B failed: %v", err)
+	}
+	if err := SetRemote(machineB, "origin", remote); err != nil {
+		t.Fatalf("SetRemote B failed: %v", err)
+	}
+	if err := Pull(machineB, "origin"); err != nil {
+		t.Fatalf("Pull B failed: %v", err)
+	}
+	bb, err := Branch(machineB)
+	if err != nil || bb != "masterlocal" {
+		t.Errorf("B on branch %q (err %v), want masterlocal", bb, err)
+	}
+}

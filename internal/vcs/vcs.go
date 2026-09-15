@@ -357,3 +357,91 @@ func Pull(dir, remote string) error {
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
+// DanglingRemoteHEAD reports whether the remote's HEAD is dangling: it
+// names a branch that has no refs on the remote, or — the only shape
+// path-local transports expose — advertises nothing at all while real
+// branches exist. A first push to a freshly-initialized bare remote
+// creates its own branch name and leaves HEAD dangling when the two
+// defaults differ (GitHub-style: HEAD at main, local default master);
+// from then on every git-native clone of the remote warns and checks out
+// an empty worktree. The advertised name is returned when the transport
+// resolves the symref (hosted remotes); path-local remotes leave it
+// empty. Unreachable remotes, absent symrefs, and zero-branch (still
+// empty) remotes report (false, "") — nothing to clone yet, nothing to
+// heal. Once a push has landed on at least one branch, a dangling HEAD
+// is the actionable kind.
+func DanglingRemoteHEAD(dir, remote string) (bool, string) {
+	out, err := exec.Command("git", "-C", dir, "ls-remote", "--symref", remote, "HEAD").Output()
+	if err != nil {
+		return false, ""
+	}
+	advertised := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "ref:" && strings.HasPrefix(fields[1], "refs/heads/") {
+			advertised = strings.TrimPrefix(fields[1], "refs/heads/")
+			break
+		}
+	}
+	heads, err := exec.Command("git", "-C", dir, "ls-remote", "--heads", remote).Output()
+	if err != nil {
+		return false, advertised
+	}
+	var names []string
+	for _, line := range strings.Split(string(heads), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.HasPrefix(fields[1], "refs/heads/") {
+			names = append(names, strings.TrimPrefix(fields[1], "refs/heads/"))
+		}
+	}
+	if advertised != "" {
+		for _, n := range names {
+			if n == advertised {
+				return false, advertised // advertised branch exists: healthy
+			}
+		}
+		return true, advertised
+	}
+	return len(names) >= 1, ""
+}
+
+// HealRemoteHEAD repairs a dangling remote HEAD by pointing it at the
+// remote's default branch — the only unambiguous choice for the
+// single-branch remotes this bug produces. Repair is possible only when
+// the remote is a bare repo on this machine (path-style URL); scheme or
+// scp-style URLs cannot be repaired from here, and the advisory return
+// says so (on hosted remotes the default branch is a settings change).
+// Returns ("", nil) when the remote is healthy, empty, or was healed; a
+// non-empty advisory when it needs a repair nestor cannot perform; an
+// error when a directly-reachable remote failed to repair. Callers should
+// warn on either non-empty result, not fail the push that just succeeded.
+func HealRemoteHEAD(dir, remote string) (string, error) {
+	dangling, advertised := DanglingRemoteHEAD(dir, remote)
+	if !dangling {
+		return "", nil
+	}
+	if !isLocalRemotePath(GetRemote(dir, remote)) {
+		if advertised != "" {
+			return fmt.Sprintf("remote advertises HEAD at %s, which does not exist — set the remote's default branch (host settings); fresh clones will check out nothing until then", advertised), nil
+		}
+		return "remote HEAD is dangling (names a branch that does not exist) — set the remote's default branch; fresh clones will check out nothing until then", nil
+	}
+	branch := RemoteDefaultBranch(dir, remote)
+	if branch == "" {
+		return "remote HEAD is dangling and no single branch stands out — set the remote's default branch", nil
+	}
+	refOut, refErr := exec.Command("git", "-C", GetRemote(dir, remote), "symbolic-ref", "HEAD", "refs/heads/"+branch).CombinedOutput()
+	if refErr != nil {
+		return "", fmt.Errorf("pointing HEAD at %s: %w (%s)", branch, refErr, strings.TrimSpace(string(refOut)))
+	}
+	return "", nil
+}
+
+// isLocalRemotePath reports whether a remote URL names a path on this
+// machine (a bare repo nestor can reach directly). Anything with a scheme
+// (https://, file://, ssh://) or an scp-like user@host prefix is out of
+// reach.
+func isLocalRemotePath(url string) bool {
+	return url != "" && !strings.Contains(url, "://") && !strings.Contains(url, "@")
+}
