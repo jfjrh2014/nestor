@@ -534,3 +534,71 @@ func TestSyncOutProfileNoConfig(t *testing.T) {
 		t.Error("config was created despite the no-config error path")
 	}
 }
+
+// TestSyncProfileCaptureSkipsBaseManaged is the session #78 regression:
+// 'nestor sync --profile X' used mergeStrings/mergeDotfiles, which dedup
+// only against the PROFILE's own lists. A base-managed item (common
+// package, base dotfile dest) that also existed on disk got captured into
+// the profile — double-deploying it under --profile runs (profile deploys
+// after base, so the profile copy wins) and mis-filing shared state as
+// machine-specific, the exact opposite of what diff's capture advice means.
+func TestSyncProfileCaptureSkipsBaseManaged(t *testing.T) {
+	cfg := &config.Config{
+		Version:  1,
+		Packages: config.Packages{Common: []string{"git", "jq"}},
+		Dotfiles: config.Dotfiles{
+			Source:   "/tmp/dotfiles",
+			Strategy: "copy",
+			Templates: []config.Template{
+				{Src: ".bashrc.tmpl", Dest: "~/.bashrc"},
+			},
+		},
+		Profiles: map[string]config.Profile{
+			"work": {Packages: []string{"vim"}},
+		},
+	}
+
+	skipped := applyScanToConfig(cfg, "work",
+		[]string{"git", "fzf"}, // git is base-managed, fzf is machine-specific
+		[]config.Template{{Src: ".bashrc.tmpl", Dest: "~/.bashrc"}}, // base-managed dest
+	)
+
+	if skipped != 2 {
+		t.Errorf("skipped = %d, want 2 (base package + base dotfile dest)", skipped)
+	}
+	prof := cfg.Profiles["work"]
+	if len(prof.Packages) != 2 || prof.Packages[0] != "vim" || prof.Packages[1] != "fzf" {
+		t.Errorf("profile work packages = %v, want [vim fzf]", prof.Packages)
+	}
+	if len(prof.Dotfiles) != 0 {
+		t.Errorf("profile work dotfiles = %v, want none (base dest skipped)", prof.Dotfiles)
+	}
+	if len(cfg.Packages.Common) != 2 {
+		t.Errorf("common packages = %v, want untouched [git jq]", cfg.Packages.Common)
+	}
+	if len(cfg.Dotfiles.Templates) != 1 {
+		t.Errorf("base templates = %v, want untouched", cfg.Dotfiles.Templates)
+	}
+}
+
+// TestSyncProfileCaptureNoBaseOverlap pins the untouched path: with no
+// base-managed overlap, the profile capture behaves exactly as before #78.
+func TestSyncProfileCaptureNoBaseOverlap(t *testing.T) {
+	cfg := &config.Config{
+		Version:  1,
+		Packages: config.Packages{Common: []string{"git"}},
+		Profiles: map[string]config.Profile{
+			"work": {Packages: []string{"vim"}},
+		},
+	}
+
+	skipped := applyScanToConfig(cfg, "work", []string{"jq"}, nil)
+
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0", skipped)
+	}
+	got := cfg.Profiles["work"].Packages
+	if len(got) != 2 || got[0] != "vim" || got[1] != "jq" {
+		t.Errorf("profile work packages = %v, want [vim jq]", got)
+	}
+}

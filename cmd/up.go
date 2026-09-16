@@ -162,10 +162,16 @@ func runUp(ctx context.Context) error {
 			temps = append(temps, dotfiles.Template{Src: t.Src, Dest: t.Dest})
 		}
 
-		// Layer profile-specific dotfiles on top
+		// Layer profile-specific dotfiles on top. A profile dest that equals
+		// a base dest is a deliberate per-profile override: warn so it is
+		// never silent, and keep the profile template LAST so it deploys
+		// after (and wins over) the base one.
 		profileTemps := cfg.ProfileDotfiles(profileName)
 		if len(profileTemps) > 0 {
 			p.OK(fmt.Sprintf("profile %s: %d extra dotfiles", profileName, len(profileTemps)))
+			for _, dest := range profileDotfileCollisions(cfg.Dotfiles.Templates, profileTemps) {
+				p.Warn(fmt.Sprintf("profile %s dotfile %s overrides the base template — profile deploys last and wins", profileName, dest))
+			}
 			for _, t := range profileTemps {
 				temps = append(temps, dotfiles.Template{Src: t.Src, Dest: t.Dest})
 			}
@@ -207,6 +213,9 @@ func runUp(ctx context.Context) error {
 			}
 			if len(profileSecrets) > 0 {
 				p.OK(fmt.Sprintf("profile %s: %d extra secrets", profileName, len(profileSecrets)))
+				for _, key := range profileSecretCollisions(cfg.Secrets.Mappings, profileSecrets) {
+					p.Warn(fmt.Sprintf("profile %s secret %q overrides the base mapping — the profile value resolves over it", profileName, key))
+				}
 				for _, m := range profileSecrets {
 					allMappings = append(allMappings, secrets.Mapping{Key: m.Key, Inject: m.Inject})
 				}
@@ -270,6 +279,41 @@ func snapshotDestPaths(cfg *config.Config, profile string) []string {
 		}
 		seen[t.Dest] = true
 		out = append(out, t.Dest)
+	}
+	return out
+}
+
+// profileDotfileCollisions returns the dests declared in both the base
+// templates and the profile layer — deliberate per-profile overrides that
+// the deploy path resolves in the profile's favor (profile deploys last).
+func profileDotfileCollisions(base, prof []config.Template) []string {
+	baseDests := make(map[string]bool, len(base))
+	for _, t := range base {
+		baseDests[t.Dest] = true
+	}
+	var out []string
+	for _, t := range prof {
+		if baseDests[t.Dest] {
+			out = append(out, t.Dest)
+		}
+	}
+	return out
+}
+
+// profileSecretCollisions returns the keys declared in both the base config
+// and the profile layer. ResolveAll is last-write-wins per key, so the
+// profile value resolves over the base one — and every base inject target
+// then receives the profile's value.
+func profileSecretCollisions(base, prof []config.Mapping) []string {
+	baseKeys := make(map[string]bool, len(base))
+	for _, m := range base {
+		baseKeys[m.Key] = true
+	}
+	var out []string
+	for _, m := range prof {
+		if baseKeys[m.Key] {
+			out = append(out, m.Key)
+		}
 	}
 	return out
 }

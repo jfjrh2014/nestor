@@ -458,3 +458,122 @@ func appendProfilesSection(t *testing.T, path, name string) {
 	defer f.Close()
 	fmt.Fprintf(f, "profiles:\n  %s:\n    packages: []\n", name)
 }
+
+// TestAddPackageProfileWarnsOnBaseDuplicate is the session #78 regression:
+// 'nestor add package --profile X' deduped only against the PROFILE's own
+// packages, so a package already in common got a redundant profile entry —
+// harmless-looking, but it mis-files shared state as machine-specific.
+// The add must warn and still write (explicit override is legitimate).
+func TestAddPackageProfileWarnsOnBaseDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	appendProfilesSection(t, cfgPath, "work")
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	if err := addPackage("git", "work", &out); err != nil {
+		t.Fatalf("addPackage profile: %v", err)
+	}
+	if !strings.Contains(out.String(), "already in common packages") {
+		t.Errorf("expected base-duplicate warning, got: %s", out.String())
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load after add: %v", err)
+	}
+	prof := cfg.Profiles["work"]
+	found := false
+	for _, p := range prof.Packages {
+		if p == "git" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("git not added to profile work packages (override must still write): %v", prof.Packages)
+	}
+}
+
+// TestAddDotfileProfileWarnsOnBaseOverride: a profile dotfile whose dest
+// equals a base dest is a deliberate per-profile override — warn, still
+// write, and the written config must still load (profile-vs-base is not
+// the same-section duplicate validate rejects).
+func TestAddDotfileProfileWarnsOnBaseOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	appendProfilesSection(t, cfgPath, "work")
+
+	// Base config carries the dest the profile is about to override.
+	existing, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	existing.Dotfiles.Templates = append(existing.Dotfiles.Templates, config.Template{Src: ".bashrc.tmpl", Dest: "~/.bashrc"})
+	if err := writeConfig(cfgPath, existing); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	if err := addDotfile("~/.bashrc", "work", &out); err != nil {
+		t.Fatalf("addDotfile profile: %v", err)
+	}
+	if !strings.Contains(out.String(), "overrides the base template") {
+		t.Errorf("expected base-override warning, got: %s", out.String())
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load after add: %v", err)
+	}
+	prof := cfg.Profiles["work"]
+	if len(prof.Dotfiles) != 1 || prof.Dotfiles[0].Dest != "~/.bashrc" {
+		t.Errorf("profile work dotfiles = %+v, want one ~/.bashrc override", prof.Dotfiles)
+	}
+}
+
+// TestAddSecretProfileWarnsOnBaseDuplicate: a profile secret whose key
+// exists in the base config means the profile value resolves over the base
+// one (and base inject targets receive it) — warn, still write.
+func TestAddSecretProfileWarnsOnBaseDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	appendProfilesSection(t, cfgPath, "work")
+
+	existing, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	existing.Secrets.Mappings = append(existing.Secrets.Mappings, config.Mapping{
+		Key:    "ghp",
+		Inject: map[string]string{"~/.baserc": "{{ .ghp }}"},
+	})
+	if err := writeConfig(cfgPath, existing); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	input := "~/.workrc\n{{ .ghp }}\n"
+	var out bytes.Buffer
+	if err := addSecret("ghp", "work", strings.NewReader(input), &out); err != nil {
+		t.Fatalf("addSecret profile: %v", err)
+	}
+	if !strings.Contains(out.String(), "already declared in the base config") {
+		t.Errorf("expected base-duplicate warning, got: %s", out.String())
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load after add: %v", err)
+	}
+	ms := cfg.Profiles["work"].SecretMappings
+	if len(ms) != 1 || ms[0].Key != "ghp" {
+		t.Errorf("profile work secret mappings = %+v, want one ghp mapping", ms)
+	}
+}

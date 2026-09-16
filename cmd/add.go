@@ -86,6 +86,12 @@ func addPackage(name, profileName string, out io.Writer) error {
 				return nil
 			}
 		}
+		for _, p := range cfg.Packages.Common {
+			if p == name {
+				fmt.Fprintf(out, "nestor: warning: %q is already in common packages — profile entry is redundant (base installs run under every profile)\n", name)
+				break
+			}
+		}
 		prof.Packages = append(prof.Packages, name)
 		cfg.Profiles[profileName] = prof
 		if err := writeConfig(path, cfg); err != nil {
@@ -145,6 +151,12 @@ func addDotfile(name, profileName string, out io.Writer) error {
 				return nil
 			}
 		}
+		for _, t := range cfg.Dotfiles.Templates {
+			if t.Dest == name {
+				fmt.Fprintf(out, "nestor: warning: dotfile %s overrides the base template (%s) — profile deploys last and wins\n", name, t.Src)
+				break
+			}
+		}
 		prof.Dotfiles = append(prof.Dotfiles, config.Template{
 			Src:  srcName,
 			Dest: name, // keep original (with ~ if provided)
@@ -200,6 +212,12 @@ func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 			if m.Key == name {
 				fmt.Fprintf(out, "nestor: secret %q already in profile %s\n", name, profileName)
 				return nil
+			}
+		}
+		for _, m := range cfg.Secrets.Mappings {
+			if m.Key == name {
+				fmt.Fprintf(out, "nestor: warning: secret %q is already declared in the base config — the profile value resolves over it, and base inject targets receive the profile value\n", name)
+				break
 			}
 		}
 		dest, pattern := promptInjectTarget(name, in, out)

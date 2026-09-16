@@ -126,7 +126,10 @@ func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
 	}
 	if existing != nil {
 		p.Warn(fmt.Sprintf("config already exists at %s — merging", outPath))
-		applyScanToConfig(existing, profileName, foundPkgs, foundDots)
+		skippedBase := applyScanToConfig(existing, profileName, foundPkgs, foundDots)
+		if skippedBase > 0 {
+			p.Info(fmt.Sprintf("skipped %d base-managed item(s) already in the common sections (profiles hold machine-specific extras only)", skippedBase))
+		}
 		// Preserve the freshly-computed source dir if the existing config has
 		// none — otherwise the merged config points at templates with no source.
 		if existing.Dotfiles.Source == "" {
@@ -187,16 +190,49 @@ func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
 // sections, the historical behavior). Profile capture is what makes
 // 'nestor diff --profile X' advice converge: its "extra" items are machine
 // specific, and steering them into common would deploy them everywhere.
-func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []string, foundDots []config.Template) {
+//
+// Base-managed items (common packages, base dotfile dests) are common by
+// definition: capturing them into a profile would double-deploy them on this
+// machine (profile entries deploy after base, so the profile copy wins) and
+// mis-file shared state as machine-specific. They are skipped and counted;
+// the return value is the number of skipped items so the capture never looks
+// like it silently swallowed anything.
+func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []string, foundDots []config.Template) int {
 	if profileName != "" {
+		basePkgs := make(map[string]bool, len(cfg.Packages.Common))
+		for _, p := range cfg.Packages.Common {
+			basePkgs[p] = true
+		}
+		baseDests := make(map[string]bool, len(cfg.Dotfiles.Templates))
+		for _, t := range cfg.Dotfiles.Templates {
+			baseDests[t.Dest] = true
+		}
+		skipped := 0
+		extraPkgs := make([]string, 0, len(foundPkgs))
+		for _, p := range foundPkgs {
+			if basePkgs[p] {
+				skipped++
+				continue
+			}
+			extraPkgs = append(extraPkgs, p)
+		}
+		extraDots := make([]config.Template, 0, len(foundDots))
+		for _, t := range foundDots {
+			if baseDests[t.Dest] {
+				skipped++
+				continue
+			}
+			extraDots = append(extraDots, t)
+		}
 		prof := cfg.Profiles[profileName]
-		prof.Packages = mergeStrings(prof.Packages, foundPkgs)
-		prof.Dotfiles = mergeDotfiles(prof.Dotfiles, foundDots)
+		prof.Packages = mergeStrings(prof.Packages, extraPkgs)
+		prof.Dotfiles = mergeDotfiles(prof.Dotfiles, extraDots)
 		cfg.Profiles[profileName] = prof
-		return
+		return skipped
 	}
 	cfg.Packages.Common = mergeStrings(cfg.Packages.Common, foundPkgs)
 	cfg.Dotfiles.Templates = mergeDotfiles(cfg.Dotfiles.Templates, foundDots)
+	return 0
 }
 
 // loadExistingForSync returns the parsed existing config at path, or nil when

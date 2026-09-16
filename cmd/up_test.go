@@ -303,3 +303,56 @@ func TestUpShellPluginEntryUnresolvedWarned(t *testing.T) {
 		t.Errorf("dead source line must not land in rc:\n%s", body)
 	}
 }
+
+// TestProfileDotfileCollisions pins the session #78 helper contract: only
+// dests present in BOTH layers are reported, order preserved, no
+// false positives from profile-only or base-only dests.
+func TestProfileDotfileCollisions(t *testing.T) {
+	base := []config.Template{
+		{Src: ".bashrc.tmpl", Dest: "~/.bashrc"},
+		{Src: "gitconfig.tmpl", Dest: "~/.gitconfig"},
+	}
+	prof := []config.Template{
+		{Src: "bashrc.work.tmpl", Dest: "~/.bashrc"}, // collision
+		{Src: "kitty.tmpl", Dest: "~/.config/kitty/kitty.conf"},
+		{Src: "gitconfig.work.tmpl", Dest: "~/.gitconfig"}, // collision
+	}
+
+	got := profileDotfileCollisions(base, prof)
+	want := []string{"~/.bashrc", "~/.gitconfig"}
+	if len(got) != len(want) {
+		t.Fatalf("collisions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("collisions[%d] = %s, want %s", i, got[i], want[i])
+		}
+	}
+
+	if got := profileDotfileCollisions(base, []config.Template{{Src: "k.tmpl", Dest: "~/.config/kitty/kitty.conf"}}); len(got) != 0 {
+		t.Errorf("no-overlap case returned %v, want none", got)
+	}
+}
+
+// TestProfileSecretCollisions pins the key-collision helper on the secrets
+// side: last-write-wins in ResolveAll means a profile key shadowing a base
+// key must be reported before inject runs.
+func TestProfileSecretCollisions(t *testing.T) {
+	base := []config.Mapping{
+		{Key: "ghp", Inject: map[string]string{"~/.gitconfig": "{{ .ghp }}"}},
+		{Key: "aws", Inject: map[string]string{"~/.aws/credentials": "{{ .aws }}"}},
+	}
+	prof := []config.Mapping{
+		{Key: "ghp", Inject: map[string]string{"~/.workrc": "{{ .ghp }}"}}, // collision
+		{Key: "workonly", Inject: map[string]string{"~/.workrc": "{{ .workonly }}"}},
+	}
+
+	got := profileSecretCollisions(base, prof)
+	if len(got) != 1 || got[0] != "ghp" {
+		t.Errorf("collisions = %v, want [ghp]", got)
+	}
+
+	if got := profileSecretCollisions(base, []config.Mapping{{Key: "workonly", Inject: map[string]string{"~/.w": "x"}}}); len(got) != 0 {
+		t.Errorf("no-overlap case returned %v, want none", got)
+	}
+}
