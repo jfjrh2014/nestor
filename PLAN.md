@@ -955,3 +955,17 @@ profiles:
 - Test-draft lessons: invented HealthyRemoteHEAD in the test for an API I'd dropped during the transport restructure — vet caught it; os.ReadDir needs Go 1.16+ and this toolchain is 1.19.8 but the module pins go 1.19 — replaced with os.Stat/IsNotExist; spliced a comment into old-text that only existed in my head (assert caught it, re-read disk first); passed the remote NAME where the server-side command wanted the resolved PATH ("cannot change to 'origin'") — first failure output was the tell.
 - 402 test functions across 14/14 packages (+3), -race clean on vcs+cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-16 — Daily dev session #78 — cross-layer profile collisions surfaced
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Bug-hunt session, started from the coverage list (vcs.IsUnborn 0% — dead exported wrapper; ci.String/packages.Run benign), then the ignored-error sweep.
+- Probed my first lead to death before it died: the #77 dangling-HEAD remote (HEAD → nonexistent main, only master real) looked like a pull landmine — RemoteDefaultBranch returns the advertised symref name unchecked, so B would align to main and `git pull origin main` would 404. Probe result: git's upload-pack NEVER advertises a dangling symref on ANY transport (ls-remote --symref prints nothing, exit 0), so RemoteDefaultBranch always falls through to the one-branch fallback. Pull is safe in every reachable shape; probe-first saved a fix for a bug that cannot happen.
+- Found via the dest-dedup question on snapshotDestPaths: cross-layer profile collisions (same dest or key in base AND profiles.X) pass Validate — the duplicate checks are per-section only — and then behave silently everywhere:
+  - up appended profile temps after base with no dedup/warning → profile copy silently overrode the base deploy.
+  - add --profile X dup-checked only within the profile section → wrote base-overriding entries without a word (package/dotfile/secret, all three branches).
+  - sync --profile X used mergeStrings/mergeDotfiles, which dedup only against the PROFILE's own lists → base-managed items (common packages, base dests) got captured into the profile as "machine-specific" — the opposite of what diff's capture advice means.
+- Fix, severity split by intent: sync capture SKIPS base-managed items (harvested state is common by definition; skipped count surfaced so nothing is silently swallowed); add WARNS and still writes (explicit override is legitimate; warning text pins which layer wins); up WARNS at deploy and inject time via extracted pure helpers profileDotfileCollisions/profileSecretCollisions (defense in depth for hand-edited YAML; profile layer kept LAST so it still deploys after and wins).
+- applyScanToConfig returns int now — TestSyncProfileCapture updated deliberately (calls ignore the return, assertions unchanged and green).
+- 7 new tests: capture skip + count, capture no-overlap untouched path, add warns-and-writes for package/dotfile/secret, both up collision helpers (hit + no-overlap cases).
+- Test-draft lesson: writeTestConfig has no profiles section — appendProfilesSection exists for that; reusing the helpers beats re-inventing fixture blocks.
+- 409 test functions across 14/14 packages (+7), -race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
