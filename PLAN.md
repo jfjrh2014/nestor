@@ -969,3 +969,12 @@ profiles:
 - Test-draft lesson: writeTestConfig has no profiles section — appendProfilesSection exists for that; reusing the helpers beats re-inventing fixture blocks.
 - 409 test functions across 14/14 packages (+7), -race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-17 — Daily dev session #79 — copy paths keep the file's mode
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Ignored-error sweep + coverage list session.
+- Found one failure mode in three copies, all "mode silently not preserved": snapshot's copyFile and sync's copyFileSynced ignored their own chmod result (`_ = out.Chmod(...)` — a failed chmod left 0600 ssh keys at 0644 with nothing said), and dotfiles' copy deploy hard-coded 0o644 outright, widening private files on first deploy and resetting manual chmods on every `up`. Semantics probe first: os.WriteFile applies perm only at creation — which made the fix half the stomping kind.
+- Fix: chmod errors are real errors in both copy helpers (out.Close() before returning so deferred-write errors aren't masked); dotfiles deploy takes perm from src at creation time; on redeploy the dest's own chmod survives (same don't-stomp-local-state philosophy as skip-hand-edits). fallbackCopy (symlink fallback) and restore.Write (fresh scaffold, no source to mirror) audited and left as-is.
+- 4 new tests: snapshot create→restore round trip lands a 0600 key back at 0600 after the original is recreated at 0666 (backup mode asserted too); dotfiles 0600 deploys at 0600 AND a local 0640 chmod of the dest survives redeploy (creation-time-only perm pinned); exec bit 0755→0755; sync capture 0600→0600.
+- Test-draft lesson: the cmd test imports were already sufficient — check the header before adding blocks; new tests are top-level, so subtest greps return 0 by design (count delta verified via git grep HEAD vs parent).
+- 413 test functions across 14/14 packages (+4), -race clean on snapshot+dotfiles+cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit 7cf94af).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
