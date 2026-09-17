@@ -371,9 +371,14 @@ func copyFileSynced(src, dest string) error {
 		out.Close()
 		return err
 	}
-	info, _ := in.Stat()
-	if info != nil {
-		_ = out.Chmod(info.Mode())
+	info, err := in.Stat()
+	if err != nil {
+		out.Close()
+		return fmt.Errorf("stat src: %w", err)
+	}
+	if err := out.Chmod(info.Mode()); err != nil {
+		out.Close()
+		return fmt.Errorf("chmod dest: %w", err)
 	}
 	return out.Close()
 }

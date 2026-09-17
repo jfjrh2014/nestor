@@ -944,3 +944,49 @@ func TestPruneRemovedIDsExist(t *testing.T) {
 		}
 	}
 }
+
+// TestCreateInPreservesPrivateMode: a 0600 file must come back from restore
+// at 0600, not 0644. copyFile's chmod used to be best-effort (`_ =`), so a
+// failed chmod landed the backup (and every restore after it) world-readable.
+func TestCreateInPreservesPrivateMode(t *testing.T) {
+	base := t.TempDir()
+	home := t.TempDir()
+	orig := filepath.Join(home, "id_ed25519")
+	if err := os.WriteFile(orig, []byte("PRIVATE KEY — shhh\n"), 0o600); err != nil {
+		t.Fatalf("write orig: %v", err)
+	}
+
+	snap, err := createIn(base, []string{orig})
+	if err != nil {
+		t.Fatalf("createIn: %v", err)
+	}
+	if len(snap.Files) != 1 {
+		t.Fatalf("expected 1 file backed up, got %d", len(snap.Files))
+	}
+
+	// Tamper with the restored state the way real life does: the original is
+	// gone (fresh machine) or recreated wide. Restore must bring 0600 back.
+	backup := filepath.Join(base, snap.ID, snap.Files[0].Backup)
+	if info, err := os.Stat(backup); err != nil {
+		t.Fatalf("stat backup: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("backup mode = %v, want 0600 (chmod must not be silent)", got)
+	}
+	if err := os.Remove(orig); err != nil {
+		t.Fatalf("remove orig: %v", err)
+	}
+	if err := os.WriteFile(orig, []byte("PRIVATE KEY — shhh\n"), 0o666); err != nil {
+		t.Fatalf("recreate orig: %v", err)
+	}
+
+	if _, err := restoreIn(base, snap.ID); err != nil {
+		t.Fatalf("restoreIn: %v", err)
+	}
+	info, err := os.Stat(orig)
+	if err != nil {
+		t.Fatalf("stat restored: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("restored mode = %v, want 0600 (private key came back world-readable)", got)
+	}
+}

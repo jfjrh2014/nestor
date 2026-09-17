@@ -124,7 +124,15 @@ func (d Deployer) copy(src, dest string, t Template) Result {
 		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("read: %w", err)}
 	}
 
-	if err := os.WriteFile(dest, data, 0o644); err != nil {
+	// Mode flows from src: a 0600 ssh key deployed at 0644 is a real leak.
+	// Perm applies only at creation, so a re-deploy keeps the dest's own
+	// chmod — same philosophy as skip-hand-edits: we don't stomp local state.
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(src); err == nil {
+		perm = info.Mode().Perm()
+	}
+
+	if err := os.WriteFile(dest, data, perm); err != nil {
 		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("write: %w", err)}
 	}
 

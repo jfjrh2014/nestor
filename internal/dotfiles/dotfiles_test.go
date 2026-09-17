@@ -872,3 +872,62 @@ func TestCopyDeployOverwritesRegularFile(t *testing.T) {
 		t.Fatalf("regular-file redeploy broken: %q", got)
 	}
 }
+
+// TestCopyPreservesPrivateMode: a 0600 source must deploy at 0600. The copy
+// branch used to hard-code 0644, quietly widening private files (ssh keys,
+// tokens) on the first deploy. On redeploy, WriteFile's perm applies only at
+// creation, so a dest the user chmod'ed locally keeps its own mode — same
+// don't-stomp-local-state philosophy as skip-hand-edits.
+func TestCopyPreservesPrivateMode(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(src, []byte("[user]\n\tname = marcus\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "out", ".gitconfig")
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	if r := d.Deploy(Template{Src: "gitconfig", Dest: dest}); r.Status != StatusDeployed {
+		t.Fatalf("expected Deployed, got %s (%v)", r.Status, r.Err)
+	}
+	if info, err := os.Stat(dest); err != nil {
+		t.Fatalf("stat dest: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("deployed mode = %v, want 0600 (0644 widens private files)", got)
+	}
+
+	// Redeploy does not stomp a local chmod of the dest.
+	if err := os.Chmod(dest, 0o640); err != nil {
+		t.Fatalf("chmod dest: %v", err)
+	}
+	if r := d.Deploy(Template{Src: "gitconfig", Dest: dest}); r.Status != StatusDeployed {
+		t.Fatalf("redeploy: expected Deployed, got %s (%v)", r.Status, r.Err)
+	}
+	if info, err := os.Stat(dest); err != nil {
+		t.Fatalf("stat dest after redeploy: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o640 {
+		t.Fatalf("redeployed mode = %v, want 640 kept (perm must apply at creation only)", got)
+	}
+}
+
+// TestCopyExecutablePreservesExecBit: an executable source deploys runnable.
+func TestCopyExecutablePreservesExecBit(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "hook.sh")
+	if err := os.WriteFile(src, []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "out", "hook.sh")
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	if r := d.Deploy(Template{Src: "hook.sh", Dest: dest}); r.Status != StatusDeployed {
+		t.Fatalf("expected Deployed, got %s (%v)", r.Status, r.Err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatalf("stat dest: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("deployed mode = %v, want 755 (exec bit dropped)", got)
+	}
+}

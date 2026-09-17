@@ -602,3 +602,28 @@ func TestSyncProfileCaptureNoBaseOverlap(t *testing.T) {
 		t.Errorf("profile work packages = %v, want [vim jq]", got)
 	}
 }
+
+// TestCopyFileSyncedPreservesPrivateMode: capture must not widen. copyFileSynced
+// used to ignore its chmod error (`_ =`), so a 0600 dotfile captured into the
+// repo could land at 0644 — the widest the file would ever be, since sync runs
+// as the user. Synced content is git-tracked, so permission bits are lost
+// there regardless; the guarantee is on the filesystem copy.
+func TestCopyFileSyncedPreservesPrivateMode(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "dot-tokens")
+	if err := os.WriteFile(src, []byte("provider: example\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "captured", "dot-tokens")
+
+	if err := copyFileSynced(src, dest); err != nil {
+		t.Fatalf("copyFileSynced: %v", err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatalf("stat dest: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("captured mode = %v, want 0600 (chmod must not be silent)", got)
+	}
+}

@@ -279,10 +279,17 @@ func copyFile(src, dest string) error {
 		out.Close()
 		return err
 	}
-	// preserve mode
-	info, _ := in.Stat()
-	if info != nil {
-		_ = out.Chmod(info.Mode())
+	// Preserve mode: a dropped chmod makes 0600 backups (ssh keys) land at
+	// 0644, and the same silence would eat it on restore. Stat and chmod
+	// failures must not pass unheard.
+	info, err := in.Stat()
+	if err != nil {
+		out.Close()
+		return fmt.Errorf("stat src: %w", err)
+	}
+	if err := out.Chmod(info.Mode()); err != nil {
+		out.Close()
+		return fmt.Errorf("chmod dest: %w", err)
 	}
 	// Close reports deferred write errors (disk full, quota) — check it.
 	if err := out.Close(); err != nil {
