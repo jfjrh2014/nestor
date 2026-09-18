@@ -978,3 +978,11 @@ profiles:
 - Test-draft lesson: the cmd test imports were already sufficient — check the header before adding blocks; new tests are top-level, so subtest greps return 0 by design (count delta verified via git grep HEAD vs parent).
 - 413 test functions across 14/14 packages (+4), -race clean on snapshot+dotfiles+cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit 7cf94af).
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-18 — Daily dev session #80 — up refuses half-removed shell rc blocks
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Overwrite-path audit session: the rc managed-block writer.
+- Found by probing WriteSourceBlock's two-marker Index logic against half-removed blocks (a hand edit that deletes one marker line but not the block content): with an orphan END marker, strings.Index finds the stray end first, endIdx < beginIdx forever, the replace guard never matches, and EVERY 'up' appends one more managed block (N runs = N blocks, plugins sourced N times). With an orphan BEGIN marker, the first 'up' appends and the second silently deletes the user lines sitting under the stray begin marker.
+- Fix: an rc holding exactly one of the two markers is refused with a "half-removed nestor block" error naming the hand-edit remedy — before any write, file byte-for-byte intact. up surfaces it via the existing p.Error path. Healthy, blockless, and no-file rc paths untouched.
+- 3 new tests: refusal both directions with byte-identical damage assertion (end-marker case runs the write 3x and asserts zero leaked block content), repair-then-recover round trip (stray marker line deleted → write lands exactly one block, user lines survive).
+- 416 test functions across 14/14 packages (+3), -race clean on shell, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (commit fcafe31).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
