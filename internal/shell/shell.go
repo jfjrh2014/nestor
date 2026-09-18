@@ -219,6 +219,14 @@ func SourceLines(results []PluginResult) (lines []string, unresolved []Plugin) {
 
 // WriteSourceBlock reads the rc file, inserts or replaces the nestor-managed
 // block with the given source lines. Idempotent: re-runs update the block in place.
+//
+// An rc holding exactly one of the two markers is treated as structurally
+// corrupt (a half-removed managed block) and refused with the file left
+// byte-for-byte intact: proceeding would either silently delete the user
+// lines sitting under the stray begin marker or append a fresh block while
+// the stray end marker keeps the replace branch from ever matching — one
+// duplicated block per run, forever. Repair is one hand edit: remove the
+// stray marker line, then re-run.
 func WriteSourceBlock(rcPath string, sourceLines []string) error {
 	existing, _ := os.ReadFile(rcPath)
 	content := string(existing)
@@ -232,6 +240,10 @@ func WriteSourceBlock(rcPath string, sourceLines []string) error {
 	// Check if an existing block is present.
 	beginIdx := strings.Index(content, markerBegin)
 	endIdx := strings.Index(content, markerEnd)
+
+	if (beginIdx >= 0) != (endIdx >= 0) {
+		return fmt.Errorf("%s has a half-removed nestor block (exactly one of the two nestor markers present) — remove the stray marker line by hand, then re-run 'nestor up'", rcPath)
+	}
 
 	if beginIdx >= 0 && endIdx >= 0 && endIdx > beginIdx {
 		// Replace existing block

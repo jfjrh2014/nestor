@@ -432,3 +432,81 @@ func countStr(s, substr string) int {
 		s = s[idx+len(substr):]
 	}
 }
+
+func TestWriteSourceBlock_RefusesOrphanBeginMarker(t *testing.T) {
+	dir := t.TempDir()
+	rcPath := filepath.Join(dir, ".zshrc")
+
+	// Hand-edit kept the begin marker but lost the end one, leaving user
+	// lines under the stray marker that a lenient writer would silently
+	// swallow on its next pass.
+	orig := "# my config\nexport FOO=1\n" + markerBegin + "\nsource ~/z.sh\n"
+	os.WriteFile(rcPath, []byte(orig), 0644)
+
+	err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"})
+	if err == nil {
+		t.Fatal("expected refusal on orphan begin marker, got nil")
+	}
+	if !contains(err.Error(), "half-removed") {
+		t.Errorf("error should describe the defect, got: %v", err)
+	}
+
+	// File must be byte-for-byte untouched — nothing appended, user lines intact.
+	data, _ := os.ReadFile(rcPath)
+	if string(data) != orig {
+		t.Errorf("rc was modified on refusal:\nwant %q\ngot  %q", orig, string(data))
+	}
+}
+
+func TestWriteSourceBlock_RefusesOrphanEndMarker(t *testing.T) {
+	dir := t.TempDir()
+	rcPath := filepath.Join(dir, ".zshrc")
+
+	// Hand-edit kept the end marker but lost the begin one: the old writer
+	// found the stray end marker first, its replace guard never matched, and
+	// every run appended one more managed block.
+	orig := "# my config\n" + markerEnd + "\nsource ~/z.sh\n# user footer\n"
+	os.WriteFile(rcPath, []byte(orig), 0644)
+
+	for i := 1; i <= 3; i++ {
+		if err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"}); err == nil {
+			t.Fatalf("run %d: expected refusal on orphan end marker, got nil", i)
+		}
+	}
+
+	// Three refused runs must not leave a single appended block or a touched byte.
+	data, _ := os.ReadFile(rcPath)
+	if string(data) != orig {
+		t.Errorf("rc was modified across 3 refusals:\nwant %q\ngot  %q", orig, string(data))
+	}
+	if countStr(string(data), markerBegin) != 0 {
+		t.Error("managed block content leaked into refused file")
+	}
+}
+
+func TestWriteSourceBlock_RecoversAfterRepair(t *testing.T) {
+	dir := t.TempDir()
+	rcPath := filepath.Join(dir, ".zshrc")
+
+	// Corrupt: orphan end marker. Repair: delete the stray marker line only.
+	corrupt := "# my config\n" + markerEnd + "\nsource ~/z.sh\n"
+	os.WriteFile(rcPath, []byte(corrupt), 0644)
+	if err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"}); err == nil {
+		t.Fatal("expected refusal before repair")
+	}
+
+	repaired := "# my config\nsource ~/z.sh\n"
+	os.WriteFile(rcPath, []byte(repaired), 0644)
+
+	if err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"}); err != nil {
+		t.Fatalf("post-repair write: %v", err)
+	}
+	data, _ := os.ReadFile(rcPath)
+	content := string(data)
+	if countStr(content, markerBegin) != 1 || countStr(content, markerEnd) != 1 {
+		t.Errorf("expected exactly one managed block after repair:\n%s", content)
+	}
+	if !contains(content, "source ~/z.sh") || !contains(content, "source /fake/p/p.zsh") {
+		t.Errorf("user lines and new plugin line must both survive:\n%s", content)
+	}
+}
