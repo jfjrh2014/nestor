@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"github.com/jfjrh2014/nestor/internal/packages"
 	"github.com/jfjrh2014/nestor/internal/platform"
 	"github.com/jfjrh2014/nestor/internal/ui"
@@ -168,12 +169,7 @@ func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
 		return fmt.Errorf("sync: %w", err)
 	}
 
-	dir := filepath.Dir(outPath)
-	if dir != "." && dir != "" {
-		_ = os.MkdirAll(dir, 0o755)
-	}
-
-	if writeErr := os.WriteFile(outPath, data, 0o644); writeErr != nil {
+	if writeErr := fsutil.WriteFileSync(outPath, data, 0o644); writeErr != nil {
 		return fmt.Errorf("sync: %w", writeErr)
 	}
 	if profileName != "" {

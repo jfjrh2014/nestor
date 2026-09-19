@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -74,7 +75,10 @@ func Write(data []byte, dest string, overwrite bool) error {
 		}
 	}
 
-	if err := os.WriteFile(dest, data, 0o644); err != nil {
+	// Durable write: a crash mid-write would leave the user's config file
+	// truncated. The overwrite guard above stays unchanged — this only
+	// changes how the bytes land.
+	if err := fsutil.WriteFileSync(dest, data, 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", dest, err)
 	}
 

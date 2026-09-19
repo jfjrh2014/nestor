@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"github.com/jfjrh2014/nestor/internal/pathutil"
 )
 
@@ -298,23 +299,13 @@ func copyFile(src, dest string) error {
 	return nil
 }
 
-// writeAtomic writes data to path, returning an error if the final close fails.
+// writeAtomic writes data to path durably: temp file in the same directory,
+// fsync, rename. A crash mid-write leaves the previous file (manifest or
+// backup) intact instead of a truncated one — a half-written manifest makes
+// the whole snapshot unlistenable/unrestorable, and a half-written backup
+// would restore damaged user data.
 func writeAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	out, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	if _, err := out.Write(data); err != nil {
-		out.Close()
-		return err
-	}
-	if err := out.Close(); err != nil {
-		return err
-	}
-	return nil
+	return fsutil.WriteFileSync(path, data, 0o600)
 }
 
 // sanitizePath turns an absolute path like /home/user/.config/nestor/foo.conf

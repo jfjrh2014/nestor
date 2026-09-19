@@ -577,3 +577,66 @@ func TestAddSecretProfileWarnsOnBaseDuplicate(t *testing.T) {
 		t.Errorf("profile work secret mappings = %+v, want one ghp mapping", ms)
 	}
 }
+
+// TestWriteConfigRoundTripIsParseable pins the durable config write: the
+// rewritten config must land complete and parseable (temp+fsync+rename, not
+// truncate-in-place), and no temp litter may survive the write.
+func TestWriteConfigRoundTripIsParseable(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	existing, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	existing.Packages.Common = append(existing.Packages.Common, "jq")
+	if err := writeConfig(cfgPath, existing); err != nil {
+		t.Fatalf("writeConfig: %v", err)
+	}
+
+	reloaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload after write: %v", err)
+	}
+	found := false
+	for _, p := range reloaded.Packages.Common {
+		if p == "jq" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("jq missing after rewrite: %v", reloaded.Packages.Common)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".nestor-write-") {
+			t.Errorf("temp litter left behind: %s", e.Name())
+		}
+	}
+}
+
+// TestWriteConfigCreatesMissingConfigDir pins that the write helper creates
+// the config's parent directory on a virgin machine (~/.config/nestor does
+// not exist yet) — sync relied on this via its own MkdirAll before the write
+// became shared.
+func TestWriteConfigCreatesMissingConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".config", "nestor", "nestor.yml")
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	cfg := &config.Config{Version: 1}
+	if err := writeConfig(cfgPath, cfg); err != nil {
+		t.Fatalf("writeConfig into missing dir: %v", err)
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("reload from freshly created dir: %v", err)
+	}
+}

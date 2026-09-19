@@ -288,3 +288,37 @@ func TestValidateURL_Schemes(t *testing.T) {
 		t.Errorf("error should mention http, got: %v", err)
 	}
 }
+
+// TestWriteDurableOverwrite pins the --force overwrite path: the rewritten
+// file must land complete and parseable, and no temp litter may survive.
+func TestWriteDurableOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "nestor.yml")
+
+	first := []byte("version: 1\n")
+	if err := Write(first, dest, false); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	updated := []byte("version: 1\npackages:\n  common:\n    - git\n")
+	if err := Write(updated, dest, true); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(updated) {
+		t.Errorf("dest = %q, want %q", got, updated)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".nestor-write-") {
+			t.Errorf("temp litter left behind: %s", e.Name())
+		}
+	}
+}

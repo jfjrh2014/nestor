@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"github.com/spf13/cobra"
 )
 
@@ -294,10 +295,13 @@ func promptInjectTarget(name string, in io.Reader, out io.Writer) (dest, pattern
 }
 
 // writeConfig writes the config back to disk preserving YAML formatting.
+// The write is durable (temp file + fsync + rename): a crash or full disk
+// mid-write leaves the previous config intact instead of a truncated,
+// unparseable YAML file that bricks every later command.
 func writeConfig(path string, cfg *config.Config) error {
 	data, err := config.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return os.WriteFile(path, data, 0644)
+	return fsutil.WriteFileSync(path, data, 0644)
 }

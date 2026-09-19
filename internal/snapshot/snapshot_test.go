@@ -990,3 +990,63 @@ func TestCreateInPreservesPrivateMode(t *testing.T) {
 		t.Fatalf("restored mode = %v, want 0600 (private key came back world-readable)", got)
 	}
 }
+
+// TestSnapshotManifestWriteIsDurable pins the manifest write path: a second
+// create over the same base must leave the existing manifest complete and
+// parseable (temp+fsync+rename), never a truncated file, with no temp litter
+// in the snapshot dir.
+func TestSnapshotManifestWriteIsDurable(t *testing.T) {
+	base := t.TempDir()
+	orig := filepath.Join(t.TempDir(), "thing.conf")
+	if err := os.WriteFile(orig, []byte("v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := createIn(base, []string{orig})
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	// Re-read the manifest the way restoreIn does and confirm it parses.
+	var check Snapshot
+	manifestPath := filepath.Join(base, first.ID, "manifest.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &check); err != nil {
+		t.Fatalf("first manifest unparseable: %v", err)
+	}
+
+	second, err := createIn(base, []string{orig})
+	if err != nil {
+		t.Fatalf("second create: %v", err)
+	}
+	raw, err = os.ReadFile(filepath.Join(base, second.ID, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var check2 Snapshot
+	if err := json.Unmarshal(raw, &check2); err != nil {
+		t.Fatalf("second manifest unparseable: %v", err)
+	}
+	if check2.ID != second.ID {
+		t.Errorf("manifest ID = %q, want %q", check2.ID, second.ID)
+	}
+	if len(check2.Files) != 1 {
+		t.Errorf("manifest files = %d, want 1", len(check2.Files))
+	}
+
+	// No temp litter anywhere in the base tree.
+	err = filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasPrefix(filepath.Base(path), ".nestor-write-") {
+			t.Errorf("temp litter left behind: %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
