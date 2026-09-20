@@ -995,3 +995,11 @@ profiles:
 - Test-draft lessons: Linux accepts any chmod bits (0o1000), so the perm injector can't fail — the rename-blocker is the real crash analogue; restore.Write is Write(data, dest, overwrite), vet caught the swapped args; fsutil grew the MkdirAll after the sync splice dropped it — add_test now pins it.
 - 422 test functions across 15/15 packages (+6, new fsutil pkg), -race clean on fsutil+snapshot+restore+cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-20 — Daily dev session #82 — inject/rc writes are crash-safe too
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). This session's run was interrupted right after the fix commit; finished it by re-verifying the full gate myself, journaling, pushing.
+- Bug: #81 made five rewrite sites durable but missed the last two writers. secrets inject wrote through bare os.WriteFile (both rewrite paths, mode hard-coded 0644) or O_APPEND (append path) — a crash or full disk mid-write leaves a torn line in a file holding secrets, and a fresh secret dest was born world-readable. shell's WriteSourceBlock same bare rewrite: a truncated rc breaks the next login shell, and every `up` reset a user's 0600 rc to 0644.
+- Fix: new fsutil.WritePerm (existing file keeps its own mode — later chmods survive rewrites; missing file gets the fallback; other stat errors surface). All three injectOne paths and WriteSourceBlock now go through WriteFileSync. Fresh secret dests land 0600; appends became whole-file durable rewrites (prior contents ride along) so no torn lines, ever.
+- 8 tests added, 1 removed deliberately: TestInjectAllOpenBlocked pinned the O_APPEND open-failure path, which no longer exists — replaced by dest-is-directory (the rename-blocker crash analogue). Plus WritePerm contract ×3, fresh-dest lands 0600, rewrite-keeps-mode on all three inject paths, append-keeps-prior-content, rc keeps its existing mode.
+- 429 test functions across 15/15 packages (+7 net), -race clean on fsutil+secrets+shell, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. Pushed (ef3975b + this journal).
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
