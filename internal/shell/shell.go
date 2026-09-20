@@ -2,6 +2,7 @@ package shell
 
 import (
 	"fmt"
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -264,5 +265,12 @@ func WriteSourceBlock(rcPath string, sourceLines []string) error {
 	if err := os.MkdirAll(filepath.Dir(rcPath), 0755); err != nil {
 		return fmt.Errorf("creating rc dir: %w", err)
 	}
-	return os.WriteFile(rcPath, []byte(content), 0644)
+	// Durable rewrite (every 'up' rewrites the rc; a truncated one breaks the
+	// next login shell) that keeps the rc's own mode — never resets a user's
+	// 0600 back to 0644.
+	perm, err := fsutil.WritePerm(rcPath, 0644)
+	if err != nil {
+		return fmt.Errorf("stat rc: %w", err)
+	}
+	return fsutil.WriteFileSync(rcPath, []byte(content), perm)
 }

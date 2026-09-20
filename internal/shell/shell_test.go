@@ -510,3 +510,30 @@ func TestWriteSourceBlock_RecoversAfterRepair(t *testing.T) {
 		t.Errorf("user lines and new plugin line must both survive:\n%s", content)
 	}
 }
+
+// TestWriteSourceBlock_KeepsExistingMode: 'up' rewrites the rc on every run,
+// so a mode the user set by hand (0600 on a shared box, for instance) must
+// survive instead of being reset to the 0644 create default.
+func TestWriteSourceBlock_KeepsExistingMode(t *testing.T) {
+	rcPath := filepath.Join(t.TempDir(), ".zshrc")
+	if err := os.WriteFile(rcPath, []byte("export EDITOR=vim\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSourceBlock(rcPath, []string{"source ~/.plugins/zsh/plugins/gradle/gradle.plugin.zsh"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(rcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("rc mode after rewrite = %v, want preserved 0600", got)
+	}
+	data, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "export EDITOR=vim") {
+		t.Fatalf("user lines lost: %q", data)
+	}
+}

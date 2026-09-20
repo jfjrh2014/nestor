@@ -100,3 +100,38 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return b
 }
+
+func TestWritePermExistingKeepsMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	perm, err := WritePerm(path, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm != 0o640 {
+		t.Fatalf("existing file mode = %v, want 0640", perm)
+	}
+}
+
+func TestWritePermMissingGetsFallback(t *testing.T) {
+	perm, err := WritePerm(filepath.Join(t.TempDir(), "absent"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm != 0o600 {
+		t.Fatalf("missing file perm = %v, want fallback 0600", perm)
+	}
+}
+
+func TestWritePermStatErrorSurfaces(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WritePerm(filepath.Join(blocker, "child"), 0o600); err == nil {
+		t.Fatal("expected stat error through a file-as-dir path, got nil")
+	}
+}

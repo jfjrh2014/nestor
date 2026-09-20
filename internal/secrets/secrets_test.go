@@ -300,10 +300,10 @@ func TestInjectAllMkdirBlocked(t *testing.T) {
 	}
 }
 
-// TestInjectAllOpenBlocked covers the open-error branch of the append path:
-// when dest itself is a directory, ReadFile fails (EISDIR) and the code falls
-// through to the append case, where OpenFile on a directory fails too.
-func TestInjectAllOpenBlocked(t *testing.T) {
+// TestInjectAllDestIsDirectory covers the refusal path when dest itself is
+// a directory: the durable rewrite must fail at the final rename (EISDIR)
+// and be reported as a StatusError, not a panic or silent skip.
+func TestInjectAllDestIsDirectory(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "iamdir")
 	if err := os.Mkdir(dest, 0o755); err != nil {
@@ -318,8 +318,16 @@ func TestInjectAllOpenBlocked(t *testing.T) {
 	if len(results) != 1 || results[0].Status != StatusError {
 		t.Fatalf("expected StatusError, got %+v", results)
 	}
-	if results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "open") {
-		t.Fatalf("expected open error, got %v", results[0].Err)
+	if results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "file exists") {
+		t.Fatalf("expected rename failure on directory dest, got %v", results[0].Err)
+	}
+	// The temp file must not litter the parent dir.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "iamdir" {
+		t.Fatalf("temp litter in parent dir: %v", entries)
 	}
 }
 
@@ -720,5 +728,84 @@ func TestInjectOneRegularFileStillWorks(t *testing.T) {
 	got, _ := os.ReadFile(dest)
 	if string(got) != "oauth_token: ghp_second\n" {
 		t.Fatalf("rotation broken: %q", got)
+	}
+}
+
+// TestInjectOneFreshDestIsOwnerOnly: a dest that doesn't exist yet will hold
+// a resolved secret value, so it must be created 0600, not 0644.
+func TestInjectOneFreshDestIsOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "fresh.env")
+
+	r := injectOne("token", "tok", dest, "token={{.Key}}")
+	if r.Status != StatusInjected {
+		t.Fatalf("expected injected, got %+v", r)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("fresh dest mode = %v, want 0600", got)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil || string(data) != "token=tok\n" {
+		t.Fatalf("content = %q, err = %v", data, err)
+	}
+}
+
+// TestInjectOneRewriteKeepsModeOnAllThreePaths: every rewrite path (literal
+// pattern, anchored line, and the append-after-unmatched-content fallback)
+// must keep the dest's own mode instead of resetting it to a constant.
+func TestInjectOneRewriteKeepsModeOnAllThreePaths(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing string
+		pattern  string
+	}{
+		{"literal-pattern", "token={{.Key}}\nother=line\n", "token={{.Key}}"},
+		{"anchored-line", "export TOKEN=stale\nother=line\n", "export TOKEN={{.Key}}"},
+		{"append-fallback", "# unrelated preamble\n", "token={{.Key}}"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dest := filepath.Join(t.TempDir(), "target")
+			if err := os.WriteFile(dest, []byte(tc.existing), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			r := injectOne("token", "tok", dest, tc.pattern)
+			if r.Status != StatusInjected {
+				t.Fatalf("expected injected, got %+v", r)
+			}
+			info, err := os.Stat(dest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != 0o640 {
+				t.Fatalf("mode after rewrite = %v, want preserved 0640", got)
+			}
+		})
+	}
+}
+
+// TestInjectOneAppendKeepsPriorContent: the append path is a whole-file
+// durable rewrite now — if it forgets to carry the existing contents along,
+// the file is silently truncated to just the new line.
+func TestInjectOneAppendKeepsPriorContent(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "appended.env")
+	if err := os.WriteFile(dest, []byte("keep=me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := injectOne("token", "tok", dest, "token={{.Key}}")
+	if r.Status != StatusInjected {
+		t.Fatalf("expected injected, got %+v", r)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "keep=me\ntoken=tok\n" {
+		t.Fatalf("prior content lost, file = %q", data)
 	}
 }

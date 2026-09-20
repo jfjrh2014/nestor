@@ -65,3 +65,18 @@ func WriteFileSync(path string, data []byte, perm os.FileMode) error {
 	}
 	return nil
 }
+
+// WritePerm resolves the mode a write to path should use: an existing file
+// keeps its own mode — a later chmod of the dest must survive rewrites, and
+// a rewrite must never widen a private file — while a not-yet-existing file
+// gets fallbackPerm. Any other stat error is returned.
+func WritePerm(path string, fallbackPerm os.FileMode) (os.FileMode, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fallbackPerm, nil
+		}
+		return 0, err
+	}
+	return info.Mode().Perm(), nil
+}

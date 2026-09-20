@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"github.com/jfjrh2014/nestor/internal/pathutil"
 )
 
@@ -183,7 +184,7 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 	dest = expandHome(dest)
 
 	// Never write through a pre-existing symlink at dest: every write path in
-	// this function (WriteFile, O_APPEND open) follows links, so a link left
+	// this function follows links, so a link left
 	// by chezmoi/stow or a hand-made alias would have its TARGET rewritten —
 	// and a dangling one would grow a file wherever it points. Refuse loudly;
 	// removing or replacing the link is the user's call.
@@ -202,15 +203,19 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 	resolved := strings.ReplaceAll(pattern, "{{.Key}}", val)
 	resolved = strings.ReplaceAll(resolved, "{{."+key+"}}", val)
 
-	data, err := os.ReadFile(dest)
-	if err == nil && len(data) > 0 {
+	data, readErr := os.ReadFile(dest)
+	if readErr == nil && len(data) > 0 {
 		content := string(data)
 
 		// Case 1: the literal pattern is still in the file (first injection
 		// against a template that still carries its placeholder).
 		if strings.Contains(content, pattern) {
 			content = strings.ReplaceAll(content, pattern, resolved)
-			if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
+			perm, err := fsutil.WritePerm(dest, 0o600)
+			if err != nil {
+				return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("stat: %w", err)}
+			}
+			if err := fsutil.WriteFileSync(dest, []byte(content), perm); err != nil {
 				return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("write: %w", err)}
 			}
 			return InjectResult{Key: key, Dest: dest, Status: StatusInjected}
@@ -222,7 +227,11 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 		// and value rotation replaces instead of appending a duplicate.
 		if anchor := patternAnchor(pattern); anchor != "" {
 			if updated, ok := replaceAnchoredLine(content, anchor, resolved); ok {
-				if err := os.WriteFile(dest, []byte(updated), 0o644); err != nil {
+				perm, err := fsutil.WritePerm(dest, 0o600)
+				if err != nil {
+					return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("stat: %w", err)}
+				}
+				if err := fsutil.WriteFileSync(dest, []byte(updated), perm); err != nil {
 					return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("write: %w", err)}
 				}
 				return InjectResult{Key: key, Dest: dest, Status: StatusInjected}
@@ -230,14 +239,21 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 		}
 	}
 
-	// Case 3: dest is absent, empty, or has no matching anchor — append the line.
+	// Case 3: dest is absent, empty, or has no matching anchor — append the
+	// line. Done as a whole-file durable rewrite (previous contents ride
+	// along) rather than an in-place O_APPEND, so a crash or full disk can't
+	// leave a torn line behind. A fresh dest — a file that will hold a
+	// secret — is created 0600, not world-readable.
 	line := resolved + "\n"
-	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("open: %w", err)}
+	content := line
+	if readErr == nil && len(data) > 0 {
+		content = string(data) + line
 	}
-	defer f.Close()
-	if _, err := f.WriteString(line); err != nil {
+	perm, err := fsutil.WritePerm(dest, 0o600)
+	if err != nil {
+		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("stat: %w", err)}
+	}
+	if err := fsutil.WriteFileSync(dest, []byte(content), perm); err != nil {
 		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("write: %w", err)}
 	}
 	return InjectResult{Key: key, Dest: dest, Status: StatusInjected}
