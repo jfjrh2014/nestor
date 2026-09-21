@@ -218,11 +218,17 @@ func TestSymlinkFallbackCopyOnFailure(t *testing.T) {
 		t.Fatalf("write src: %v", err)
 	}
 
-	// Symlinking onto a non-empty directory path fails, forcing the
-	// fallbackCopy branch.
+	// Force the SYMLINK step itself to fail: a non-empty directory planted
+	// at the temp-link name defeats os.Symlink (EEXIST, and the pre-remove
+	// can't clear a non-empty dir), while the non-empty dir at dest defeats
+	// the fallback copy. Permission tricks can't force EACCES under root.
 	blocked := filepath.Join(dir, "blocked")
 	if err := os.MkdirAll(filepath.Join(blocked, "sub"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
+	}
+	tmpLinkDir := filepath.Join(dir, "blocked.nestor-tmp-link") // tmp-link name derives from the DEST
+	if err := os.MkdirAll(filepath.Join(tmpLinkDir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir tmp-link: %v", err)
 	}
 
 	d := Deployer{Strategy: StrategySymlink, Source: dir}
@@ -233,6 +239,9 @@ func TestSymlinkFallbackCopyOnFailure(t *testing.T) {
 	}
 	if r.Err == nil || !strings.Contains(r.Err.Error(), "symlink") {
 		t.Fatalf("expected symlink error, got %v", r.Err)
+	}
+	if _, err := os.Stat(filepath.Join(blocked, "sub")); err != nil {
+		t.Fatalf("user's directory was damaged by a failed deploy: %v", err)
 	}
 }
 
@@ -929,5 +938,206 @@ func TestCopyExecutablePreservesExecBit(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o755 {
 		t.Fatalf("deployed mode = %v, want 755 (exec bit dropped)", got)
+	}
+}
+
+// TestSymlinkDeployKeepsOldDestWhenSwapFails: the deploy links to a temp
+// name and renames over dest, so a dest shape that defeats the rename (a
+// non-empty directory) is refused with the dest intact and no temp-link
+// litter. The old remove-then-link order had a destroy window instead: a
+// crash between the two steps lost the dest outright, and a foreign file
+// created in the window was silently linked over.
+func TestSymlinkDeployKeepsOldDestWhenSwapFails(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "plain.conf")
+	if err := os.WriteFile(src, []byte("new content\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	blocked := filepath.Join(dir, ".app.conf")
+	if err := os.MkdirAll(filepath.Join(blocked, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	keep := filepath.Join(blocked, "precious.txt")
+	if err := os.WriteFile(keep, []byte("PRECIOUS\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategySymlink, Source: dir}
+	r := d.Deploy(Template{Src: "plain.conf", Dest: blocked})
+	if r.Status != StatusError {
+		t.Fatalf("expected Error, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "rename") {
+		t.Fatalf("expected rename refusal, got %v", r.Err)
+	}
+
+	got, err := os.ReadFile(keep)
+	if err != nil {
+		t.Fatalf("user's directory was damaged by a failed deploy: %v", err)
+	}
+	if string(got) != "PRECIOUS\n" {
+		t.Fatalf("user file changed: %q", got)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".nestor-tmp-link") {
+			t.Fatalf("temp link litter left behind: %s", e.Name())
+		}
+	}
+}
+
+// TestSymlinkDeployReplacesOldDest: switching a dotfile from copy-managed to
+// symlink strategy must replace the old regular file at dest with the link.
+func TestSymlinkDeployReplacesOldDest(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "tmux.conf")
+	if err := os.WriteFile(src, []byte("set -g mouse on\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	home := t.TempDir()
+	dest := filepath.Join(home, ".tmux.conf")
+	if err := os.WriteFile(dest, []byte("old copy\n"), 0o600); err != nil {
+		t.Fatalf("write old dest: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategySymlink, Source: dir}
+	r := d.Deploy(Template{Src: "tmux.conf", Dest: dest})
+	if r.Status != StatusDeployed || r.Err != nil {
+		t.Fatalf("deploy: status=%s err=%v", r.Status, r.Err)
+	}
+	target, err := os.Readlink(dest)
+	if err != nil {
+		t.Fatalf("dest is not a symlink after re-deploy: %v", err)
+	}
+	if !samePath(target, src) {
+		t.Fatalf("target = %q, want %q", target, src)
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".nestor-tmp-link") {
+			t.Fatalf("temp link litter left behind: %s", e.Name())
+		}
+	}
+}
+
+// TestSymlinkDeployRedeployOverExistingLink: running the deploy twice must
+// swap the link in place, not fail because dest already exists.
+func TestSymlinkDeployRedeployOverExistingLink(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "app.conf")
+	if err := os.WriteFile(src, []byte("key=value\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	home := t.TempDir()
+	dest := filepath.Join(home, ".app.conf")
+	d := Deployer{Strategy: StrategySymlink, Source: dir}
+
+	for i := 0; i < 2; i++ {
+		r := d.Deploy(Template{Src: "app.conf", Dest: dest})
+		if r.Status != StatusDeployed || r.Err != nil {
+			t.Fatalf("deploy %d: status=%s err=%v", i+1, r.Status, r.Err)
+		}
+	}
+	target, err := os.Readlink(dest)
+	if err != nil {
+		t.Fatalf("dest is not a symlink after redeploy: %v", err)
+	}
+	if !samePath(target, src) {
+		t.Fatalf("target = %q, want %q", target, src)
+	}
+}
+
+// TestFallbackCopyKeepsDestOnFailure: the copy fallback now goes through the
+// durable writer, so a failed copy (rename blocked by a directory at dest)
+// must leave the existing dest untouched with no temp litter.
+func TestFallbackCopyKeepsDestOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.conf")
+	if err := os.WriteFile(src, []byte("payload\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	dest := filepath.Join(dir, "subdir")
+	if err := os.MkdirAll(filepath.Join(dest, "inner"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "user.txt"), []byte("USER\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := fallbackCopy(src, dest); err == nil {
+		t.Fatal("expected error renaming over a directory")
+	}
+
+	got, err := os.ReadFile(filepath.Join(dest, "user.txt"))
+	if err != nil {
+		t.Fatalf("dest directory was damaged: %v", err)
+	}
+	if string(got) != "USER\n" {
+		t.Fatalf("user file changed: %q", got)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".nestor-write-") {
+			t.Fatalf("temp litter left behind: %s", e.Name())
+		}
+	}
+}
+
+// TestSymlinkTemplateRedeployKeepsDestOnRenderFailure: after a successful
+// template deploy, a source that stops rendering (broken template, missing
+// key) must fail the redeploy WITHOUT destroying the deployed link and its
+// rendered content.
+func TestSymlinkTemplateRedeployKeepsDestOnRenderFailure(t *testing.T) {
+	srcDir := t.TempDir()
+	home := t.TempDir()
+	tmpl := filepath.Join(srcDir, "app.conf.tmpl")
+	if err := os.WriteFile(tmpl, []byte("token = {{env \"NESTOR_TEST_TOKEN\"}}\n"), 0o644); err != nil {
+		t.Fatalf("write tmpl: %v", err)
+	}
+	t.Setenv("NESTOR_TEST_TOKEN", "v1")
+
+	dest := filepath.Join(home, ".app.conf")
+	d := Deployer{Strategy: StrategySymlink, Source: srcDir}
+	r := d.Deploy(Template{Src: "app.conf.tmpl", Dest: dest})
+	if r.Status != StatusDeployed || r.Err != nil {
+		t.Fatalf("first deploy: status=%s err=%v", r.Status, r.Err)
+	}
+
+	// Break the render: a map lookup on a missing key fails under
+	// missingkey=error.
+	if err := os.WriteFile(tmpl, []byte("token = {{.NESTOR_TEST_TOKEN}}\n"), 0o644); err != nil {
+		t.Fatalf("rewrite tmpl: %v", err)
+	}
+
+	r = d.Deploy(Template{Src: "app.conf.tmpl", Dest: dest})
+	if r.Status != StatusError {
+		t.Fatalf("expected Error after broken render, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "render") {
+		t.Fatalf("expected render error, got %v", r.Err)
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("deployed dest was destroyed by failed redeploy: %v", err)
+	}
+	if string(data) != "token = v1\n" {
+		t.Fatalf("deployed content changed: %q", data)
+	}
+	if info, err := os.Lstat(dest); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("dest is no longer a symlink after failed redeploy: %v %v", info, err)
 	}
 }

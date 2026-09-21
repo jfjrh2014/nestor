@@ -4,12 +4,12 @@ package dotfiles
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"github.com/jfjrh2014/nestor/internal/pathutil"
 )
 
@@ -167,15 +167,29 @@ func (d Deployer) symlink(src, dest string, t Template) Result {
 		linkTarget = renderPath
 	}
 
-	// Try to remove existing dest first.
-	// We don't reschedule as "skipped" because the user wants the symlink to reflect src.
-	_ = os.Remove(dest)
-
-	if err := os.Symlink(linkTarget, dest); err != nil {
-		// Peerless fallback: if symlinking fails (permissions, FS, etc.), attempt a unix-style ln.
+	// Swap the link in without destroying the old dest first: the link is
+	// created under a temp name beside dest and renamed over it. Removing
+	// dest up front turned every later failure (unrenderable target,
+	// read-only dir, failed fallback copy) into silent data loss — the old
+	// file was already gone when the error surfaced. If the final rename
+	// fails, the old dest is still in place; only the temp link litters.
+	tmpLink := dest + ".nestor-tmp-link"
+	_ = os.Remove(tmpLink)
+	if err := os.Symlink(linkTarget, tmpLink); err != nil {
+		// Peerless fallback: if symlinking fails (permissions, FS, etc.),
+		// attempt a unix-style ln — dest is still intact here, so a failed
+		// fallback leaves the user's file untouched.
 		if fallbackErr := fallbackCopy(linkTarget, dest); fallbackErr != nil {
 			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("symlink: %w (fallback: %v)", err, fallbackErr)}
 		}
+		if rmErr := os.Remove(dest); rmErr != nil {
+			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("symlink: %w (fallback copy landed; removing old dest failed: %v)", err, rmErr)}
+		}
+		return Result{Template: t, Status: StatusDeployed}
+	}
+	if err := os.Rename(tmpLink, dest); err != nil {
+		os.Remove(tmpLink)
+		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("rename %q over %q: %w", tmpLink, dest, err)}
 	}
 
 	return Result{Template: t, Status: StatusDeployed}
@@ -213,21 +227,19 @@ func Render(path string) ([]byte, error) {
 	return renderTemplate(path)
 }
 
+// fallbackCopy writes src's content to dest durably (temp + fsync + rename)
+// with src's permission bits. It runs while dest is still intact, so a failed
+// copy leaves the user's existing file untouched.
 func fallbackCopy(src, dest string) error {
-	in, err := os.Open(src)
+	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(src); err == nil {
+		perm = info.Mode().Perm()
 	}
-	defer out.Close()
-
-	_, err = io.Copy(out, in)
-	return err
+	return fsutil.WriteFileSync(dest, data, perm)
 }
 
 // Check compares the rendered template source against the deployed dest
