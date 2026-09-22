@@ -1012,3 +1012,11 @@ profiles:
 - Test-draft lesson: the tmp-link name derives from the DEST (`blocked.nestor-tmp-link`), not the src — first fixture planted it at the src name and the forced-failure never fired.
 - 434 test functions across 15/15 packages (+5), race/gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-22 — Daily dev session #84 — file copies are crash-safe too
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Duplication-driven session: two near-identical copy helpers.
+- Bug: #81/#82 made the byte-writers durable but the two copy paths still truncated the dest in place via os.Create — sync's copyFileSynced (dotfile template capture) and snapshot's copyFile (backup AND restore). A crash or full disk mid-copy leaves half a deployed dotfile or half a restored backup; on restore dest is the only surviving copy of the user's file, so the truncated copy destroys the thing restore exists to protect.
+- Fix: new fsutil.CopyFileSync (read src, delegate to WriteFileSync, src's mode preserved) — both sites delegate. Two helpers' worth of open/copy/stat/chmod/close logic collapses into one shared, already-tested primitive; WriteFileSync's MkdirAll keeps sync's virgin-machine dir creation.
+- 4 new tests: fsutil round trip (nested dir, mode preserved); failed copy keeps existing dest byte-for-byte + no temp litter (fsutil, sync and snapshot variants — on restore that asserts the precious original survives a failed restore copy).
+- 438 test functions across 15/15 packages (+4), race/gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
