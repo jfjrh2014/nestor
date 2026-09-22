@@ -348,35 +348,10 @@ func copyDotfileTemplates(home, sourceDir string, templates []config.Template) (
 	return copied, skipped, firstErr
 }
 
-// copyFileSynced copies src to dest, preserving file mode.
+// copyFileSynced copies src to dest through fsutil.CopyFileSync (durable
+// temp+fsync+rename), preserving file mode.
 func copyFileSynced(src, dest string) error {
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	info, err := in.Stat()
-	if err != nil {
-		out.Close()
-		return fmt.Errorf("stat src: %w", err)
-	}
-	if err := out.Chmod(info.Mode()); err != nil {
-		out.Close()
-		return fmt.Errorf("chmod dest: %w", err)
-	}
-	return out.Close()
+	return fsutil.CopyFileSync(src, dest)
 }
 
 // mergeStrings appends items from src to dst that are not already present,

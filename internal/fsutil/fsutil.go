@@ -3,6 +3,7 @@
 package fsutil
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -64,6 +65,27 @@ func WriteFileSync(path string, data []byte, perm os.FileMode) error {
 		d.Close()
 	}
 	return nil
+}
+
+// CopyFileSync copies src to dest durably, preserving src's mode. It reads
+// src, then hands off to WriteFileSync so the same temp+fsync+rename
+// guarantee applies: a crash or an error at any point leaves the destination
+// holding either the previous contents or the complete new copy — never a
+// truncated half-file. This matters most on restore, where dest is the only
+// surviving copy of a file (the backup at src can be re-read to retry).
+//
+// On any failure the temp file is removed and the destination is left
+// byte-for-byte unchanged.
+func CopyFileSync(src, dest string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("stat src: %w", err)
+	}
+	return WriteFileSync(dest, data, info.Mode().Perm())
 }
 
 // WritePerm resolves the mode a write to path should use: an existing file

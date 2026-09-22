@@ -627,3 +627,29 @@ func TestCopyFileSyncedPreservesPrivateMode(t *testing.T) {
 		t.Fatalf("captured mode = %v, want 0600 (chmod must not be silent)", got)
 	}
 }
+
+// TestCopyFileSyncedFailedCopyKeepsDest: the durable-copy contract. Before the
+// fsutil delegation a mid-copy crash or full disk left the dest truncated in
+// place (os.Create); now a failed copy must leave an existing dest
+// byte-for-byte unchanged, with no temp-file litter.
+func TestCopyFileSyncedFailedCopyKeepsDest(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "deployed-dotfile")
+	if err := os.WriteFile(dest, []byte("previous contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFileSynced(filepath.Join(dir, "missing-src"), dest); err == nil {
+		t.Fatal("expected error copying from a missing src")
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "previous contents" {
+		t.Errorf("dest content = %q after failed copy, want unchanged", got)
+	}
+	litter, _ := filepath.Glob(filepath.Join(dir, ".nestor-*"))
+	if len(litter) != 0 {
+		t.Errorf("temp litter left behind: %v", litter)
+	}
+}

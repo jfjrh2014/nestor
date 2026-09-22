@@ -5,7 +5,6 @@ package snapshot
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -258,45 +257,12 @@ func pruneIn(base string, keep int) ([]string, error) {
 	return removed, nil
 }
 
-// copyFile copies src to dest, preserving file mode. It checks the close
-// error on the destination so that write failures (e.g. disk full) are not
-// silently turned into truncated backups.
+// copyFile copies src to dest through fsutil.CopyFileSync (durable
+// temp+fsync+rename), preserving file mode. On restore dest is the only
+// surviving copy of the user's file — the durable copy guarantees a crash
+// leaves it holding the old contents, never a truncated half-file.
 func copyFile(src, dest string) error {
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	// Preserve mode: a dropped chmod makes 0600 backups (ssh keys) land at
-	// 0644, and the same silence would eat it on restore. Stat and chmod
-	// failures must not pass unheard.
-	info, err := in.Stat()
-	if err != nil {
-		out.Close()
-		return fmt.Errorf("stat src: %w", err)
-	}
-	if err := out.Chmod(info.Mode()); err != nil {
-		out.Close()
-		return fmt.Errorf("chmod dest: %w", err)
-	}
-	// Close reports deferred write errors (disk full, quota) — check it.
-	if err := out.Close(); err != nil {
-		return err
-	}
-	return nil
+	return fsutil.CopyFileSync(src, dest)
 }
 
 // writeAtomic writes data to path durably: temp file in the same directory,

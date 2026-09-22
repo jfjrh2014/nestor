@@ -1050,3 +1050,30 @@ func TestSnapshotManifestWriteIsDurable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestCopyFileFailedRestoreKeepsOriginal: on restore, dest (Original) is the
+// only surviving copy of the user's file. Before the fsutil delegation the
+// copy truncated it in place (os.Create), so a crash or full disk mid-restore
+// destroyed it. A failed restore copy must leave the original byte-for-byte
+// unchanged, with no temp litter beside it.
+func TestCopyFileFailedRestoreKeepsOriginal(t *testing.T) {
+	dir := t.TempDir()
+	original := filepath.Join(dir, "user-dotfile")
+	if err := os.WriteFile(original, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(filepath.Join(dir, "missing-backup"), original); err == nil {
+		t.Fatal("expected error restoring from a missing backup")
+	}
+	got, err := os.ReadFile(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "precious" {
+		t.Errorf("original content = %q after failed restore, want unchanged", got)
+	}
+	litter, _ := filepath.Glob(filepath.Join(dir, ".nestor-*"))
+	if len(litter) != 0 {
+		t.Errorf("temp litter left behind: %v", litter)
+	}
+}

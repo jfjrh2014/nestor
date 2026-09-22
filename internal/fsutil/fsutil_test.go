@@ -135,3 +135,51 @@ func TestWritePermStatErrorSurfaces(t *testing.T) {
 		t.Fatal("expected stat error through a file-as-dir path, got nil")
 	}
 }
+
+func TestCopyFileSyncRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "key")
+	if err := os.WriteFile(src, []byte("PRIVATE KEY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "nested", "key.copy")
+	if err := CopyFileSync(src, dest); err != nil {
+		t.Fatalf("CopyFileSync: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "PRIVATE KEY\n" {
+		t.Errorf("dest content = %q, want original", got)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("dest mode = %v, want 0600 (src mode preserved)", info.Mode().Perm())
+	}
+}
+
+func TestCopyFileSyncFailureKeepsDest(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "existing")
+	if err := os.WriteFile(dest, []byte("old contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyFileSync(filepath.Join(dir, "missing"), dest); err == nil {
+		t.Fatal("expected error copying from a missing src")
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "old contents" {
+		t.Errorf("dest content = %q after failed copy, want byte-for-byte unchanged", got)
+	}
+	litter, _ := filepath.Glob(filepath.Join(dir, ".nestor-write-*"))
+	if len(litter) != 0 {
+		t.Errorf("temp litter left behind: %v", litter)
+	}
+}
