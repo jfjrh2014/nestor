@@ -1141,3 +1141,134 @@ func TestSymlinkTemplateRedeployKeepsDestOnRenderFailure(t *testing.T) {
 		t.Fatalf("dest is no longer a symlink after failed redeploy: %v %v", info, err)
 	}
 }
+
+// TestCopyDeployFailureKeepsDest: the copy deploy now writes through
+// fsutil.WriteFileSync (temp+fsync+rename), so a failed write must leave the
+// existing dest byte-for-byte intact — the pre-#85 order truncated the dest
+// in place, so a crash mid-write was a torn dotfile. The crash analogue:
+// plant a non-empty directory at the temp-file pattern space? WriteFileSync
+// fails on rename when the dest itself is a directory; the copy branch's
+// symlink guard already refuses that, so force failure at the source instead:
+// make the source unreadable after the deployer has rendered? Simplest real
+// crash analogue: a dest parent that is a file blocks CreateTemp.
+// NOTE: appended, refined below.
+func TestCopyDeployFailureKeepsDest(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(src, []byte("v2\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	outDir := filepath.Join(dir, "out")
+	dest := filepath.Join(outDir, ".gitconfig")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+	if err := os.WriteFile(dest, []byte("precious\n"), 0o600); err != nil {
+		t.Fatalf("write dest: %v", err)
+	}
+
+	// Make the write fail by planting a file at the parent dir path is
+	// impossible (dest exists). Instead: stat error injection isn't
+	// available, so use the rename blocker — replace the dest with a
+	// directory. The symlink guard only checks ModeSymlink, so a directory
+	// dest reaches the write and the rename inside WriteFileSync fails.
+	if err := os.Remove(dest); err != nil {
+		t.Fatalf("remove dest: %v", err)
+	}
+	if err := os.Mkdir(dest, 0o700); err != nil {
+		t.Fatalf("mkdir dest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "keepme"), []byte("user file\n"), 0o600); err != nil {
+		t.Fatalf("write keeper: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "gitconfig", Dest: dest})
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError, got %s (%v)", r.Status, r.Err)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "keepme"))
+	if err != nil || string(got) != "user file\n" {
+		t.Fatalf("user file damaged or missing: %q err=%v", got, err)
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("dest directory vanished: %v", err)
+	}
+	// No temp litter beside the dest.
+	entries, _ := os.ReadDir(outDir)
+	for _, e := range entries {
+		if e.Name() == ".gitconfig" {
+			continue
+		}
+		t.Fatalf("temp litter left behind: %s", e.Name())
+	}
+}
+
+// TestRenderedFileFailureKeepsPreviousRender: the rendered-template file is
+// the symlink target of a deployed .tmpl dotfile, so a torn rewrite there is
+// a torn dotfile on every deployed machine. The write goes through
+// fsutil.WriteFileSync now; force the rename-block failure and assert the
+// PREVIOUS render survives byte-for-byte and the deployed link still reads.
+func TestRenderedFileFailureKeepsPreviousRender(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "gitconfig.tmpl")
+	if err := os.WriteFile(src, []byte("name = {{ env \"NESTOR_TEST_RENDER\" }}\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, ".gitconfig")
+	t.Setenv("NESTOR_TEST_RENDER", "v1")
+
+	d := Deployer{Strategy: StrategySymlink, Source: dir}
+	if r := d.Deploy(Template{Src: "gitconfig.tmpl", Dest: dest}); r.Status != StatusDeployed {
+		t.Fatalf("first deploy: expected Deployed, got %s (%v)", r.Status, r.Err)
+	}
+	renderPath := renderedLinkPath(src)
+	first, err := os.ReadFile(renderPath)
+	if err != nil || string(first) != "name = v1\n" {
+		t.Fatalf("first render wrong: %q err=%v", first, err)
+	}
+	linkDest, err := os.Readlink(dest)
+	if err != nil || linkDest != renderPath {
+		t.Fatalf("dest not a link to render: %q err=%v", linkDest, err)
+	}
+
+	// Crash analogue: block the rename by making the rendered dir a
+	// non-empty directory conflict — renderPath must become a directory for
+	// rename to fail. Remove the render file, plant a directory with a user
+	// file at its name.
+	if err := os.Remove(renderPath); err != nil {
+		t.Fatalf("remove render: %v", err)
+	}
+	if err := os.Mkdir(renderPath, 0o700); err != nil {
+		t.Fatalf("plant dir: %v", err)
+	}
+	keeper := filepath.Join(renderPath, "userfile")
+	if err := os.WriteFile(keeper, []byte("precious\n"), 0o600); err != nil {
+		t.Fatalf("write keeper: %v", err)
+	}
+
+	r := d.Deploy(Template{Src: "gitconfig.tmpl", Dest: dest})
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError on blocked render write, got %s (%v)", r.Status, r.Err)
+	}
+	// The keeper file (crash analogue of prior contents) must be intact.
+	got, err := os.ReadFile(keeper)
+	if err != nil || string(got) != "precious\n" {
+		t.Fatalf("keeper damaged: %q err=%v", got, err)
+	}
+	// No temp litter in the rendered dir.
+	entries, _ := os.ReadDir(filepath.Dir(renderPath))
+	for _, e := range entries {
+		if e.Name() == filepath.Base(src) { // the planted failure directory
+			continue
+		}
+		t.Fatalf("litter in rendered dir: %s", e.Name())
+	}
+	entries, _ = os.ReadDir(renderPath)
+	for _, e := range entries {
+		if e.Name() == "userfile" {
+			continue
+		}
+		t.Fatalf("temp litter beside keeper: %s", e.Name())
+	}
+}

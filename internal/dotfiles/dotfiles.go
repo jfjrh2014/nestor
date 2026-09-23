@@ -132,7 +132,15 @@ func (d Deployer) copy(src, dest string, t Template) Result {
 		perm = info.Mode().Perm()
 	}
 
-	if err := os.WriteFile(dest, data, perm); err != nil {
+	// Durable write: temp+fsync+rename (a crash mid-write used to leave half
+	// a dotfile; the dest now holds either the old or the new contents). On a
+	// redeploy the dest keeps its own chmod — perm still applies at creation
+	// only, WritePerm hands back the existing mode for WriteFileSync to apply.
+	writePerm, err := fsutil.WritePerm(dest, perm)
+	if err != nil {
+		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("write: %w", err)}
+	}
+	if err := fsutil.WriteFileSync(dest, data, writePerm); err != nil {
 		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("write: %w", err)}
 	}
 
@@ -161,7 +169,7 @@ func (d Deployer) symlink(src, dest string, t Template) Result {
 		if err := os.MkdirAll(filepath.Dir(renderPath), 0o700); err != nil {
 			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("render: %w", err)}
 		}
-		if err := os.WriteFile(renderPath, data, 0o600); err != nil {
+		if err := fsutil.WriteFileSync(renderPath, data, 0o600); err != nil {
 			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("render: %w", err)}
 		}
 		linkTarget = renderPath
