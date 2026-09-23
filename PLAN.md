@@ -1020,3 +1020,11 @@ profiles:
 - 4 new tests: fsutil round trip (nested dir, mode preserved); failed copy keeps existing dest byte-for-byte + no temp litter (fsutil, sync and snapshot variants — on restore that asserts the precious original survives a failed restore copy).
 - 438 test functions across 15/15 packages (+4), race/gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-23 — Daily dev session #85 — dotfile deploys write durably too
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Writer-sweep follow-up: grep for os.WriteFile/os.Create outside fsutil after #84.
+- Bug: the last two non-durable writers were in dotfiles — the copy deploy rewrote a live dotfile with bare os.WriteFile (crash mid-write = torn dotfile), and the rendered-template file (.nestor-rendered/) that a symlink deploy LINKS to was rewritten non-durably on every 'up' (torn render = torn dotfile on the deployed link, propagating to every checkout of that machine's config).
+- Fix: copy deploy goes through WritePerm (keeps #79's creation-time-only perm contract) + WriteFileSync; rendered file via plain WriteFileSync at 0600. The three remaining bare writers are guarded first-writes (init/edit refuse existing, gitignore skips existing) — audited, left alone, named here so the sweep is closed.
+- 2 new tests: failed copy deploy leaves the dest (planted directory with a user file) intact with no temp litter; failed rendered-file rewrite keeps the prior render's spot intact + no litter (crash analogue: rename blocked by a directory at the render path). Fixture lesson struck again: MkdirAll before WriteFile, and the litter-skip key is the planted dir's own name (derived from src), not the marker.
+- 440 test functions across 15/15 packages (+2), race clean on dotfiles+fsutil, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
