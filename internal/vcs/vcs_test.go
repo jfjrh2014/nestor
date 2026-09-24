@@ -690,3 +690,50 @@ func TestHealRemoteHEADFixesPathLocalRemote(t *testing.T) {
 		t.Errorf("B on branch %q (err %v), want masterlocal", bb, err)
 	}
 }
+
+// TestIsLocalRemotePathScpSyntax pins the session #86 regression: the
+// classifier missed git's scp-like syntax when it carries no user part.
+// isLocalRemotePath("example.com:foo/bar.git") returned true (no "://",
+// no "@"), so HealRemoteHEAD on a dangling scp remote skipped the
+// advisory branch and ran `git -C example.com:foo/bar.git symbolic-ref`
+// — a hard error, violating HealRemoteHEAD's "warn, never fail the push"
+// contract. The table ports git's own rule (connect.c
+// url_is_local_not_ssh): local = no scheme AND no colon before the first
+// slash, with Windows drive letters the sanctioned exception.
+func TestIsLocalRemotePathScpSyntax(t *testing.T) {
+	cases := []struct {
+		url  string
+		want bool
+	}{
+		// Plain local paths: local, on any platform.
+		{"/tmp/remote.git", true},
+		{"remote.git", true},
+		{"relative/dir/repo", true},
+		// Schemes: never local.
+		{"https://github.com/u/r.git", false},
+		{"file:///tmp/remote.git", false},
+		{"ssh://git@host/tmp/remote.git", false},
+		// user@host scp-like: remote (was already correct).
+		{"git@github.com:u/r.git", false},
+		{"user@192.168.1.5:/srv/repo.git", false},
+		// user-LESS scp-like: remote. These are the regression.
+		{"example.com:foo/bar.git", false},
+		{"example.com:foo", false},
+		{"foo:bar", false},
+		// Bracketed IPv6 without a user part: remote.
+		{"[::1]:2222/x.git", false},
+		{"[2001:db8::1]:repo.git", false},
+		// Windows drive letters: local despite the leading colon shape.
+		{"C:/Users/me/repo", true},
+		{"c:\\Users\\me\\repo", true},
+		// Pathological but decisive: a colon AFTER the first slash is
+		// an ordinary filename on a local path, not a host separator.
+		{"/tmp/wei:rd/repo", true},
+		{"./a:b", true},
+	}
+	for _, tc := range cases {
+		if got := isLocalRemotePath(tc.url); got != tc.want {
+			t.Errorf("isLocalRemotePath(%q) = %v, want %v", tc.url, got, tc.want)
+		}
+	}
+}

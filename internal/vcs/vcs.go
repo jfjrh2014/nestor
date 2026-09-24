@@ -439,9 +439,26 @@ func HealRemoteHEAD(dir, remote string) (string, error) {
 }
 
 // isLocalRemotePath reports whether a remote URL names a path on this
-// machine (a bare repo nestor can reach directly). Anything with a scheme
-// (https://, file://, ssh://) or an scp-like user@host prefix is out of
-// reach.
+// machine (a bare repo nestor can reach directly with git -C). It ports
+// git's own classification (connect.c url_is_local_not_ssh): a URL is
+// local only when it has no scheme ("proto://") and no colon before the
+// first slash. A colon before any slash is the scp-like syntax —
+// [user@]host:path — which git dials over SSH even without the user part:
+// example.com:foo/bar.git, foo:bar, and bracketed IPv6 [::1]:2222/x.git
+// are all remote, not local. Windows drive letters (C:/x, c:\x) are local
+// despite the colon.
 func isLocalRemotePath(url string) bool {
-	return url != "" && !strings.Contains(url, "://") && !strings.Contains(url, "@")
+	if url == "" || strings.Contains(url, "://") {
+		return false
+	}
+	colon := strings.IndexByte(url, ':')
+	if colon < 0 {
+		return true
+	}
+	slash := strings.IndexAny(url, "/\\")
+	if slash >= 0 && colon > slash {
+		return true // a slash precedes the colon: an ordinary local path
+	}
+	// Colon first: scp-like host:path, unless it is a drive letter.
+	return colon == 1 && ((url[0] >= 'A' && url[0] <= 'Z') || (url[0] >= 'a' && url[0] <= 'z'))
 }
