@@ -1036,3 +1036,11 @@ profiles:
 - 1 new table test (17 cases): every git classification shape — plain paths, schemes, user@host scp, user-LESS scp (the regression), bracketed IPv6, drive letters, and colon-after-slash local filenames. End-to-end heal on a live scp remote is untestable offline (no sshd); the classifier is the bug, so it's what the test pins.
 - 441 test functions across 15/15 packages (+1), race clean on vcs, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-25 — Daily dev session #87 — one default dotfiles source for all commands
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Duplication-driven session: grep for who replicates the "~/.config/nestor/dotfiles" default.
+- Bug: the fallback for dotfiles.source was hand-copied into seven commands (list, up, dashboard, edit, sync with Join; diff, doctor with Sprintf) — the two spellings diverge when HOME is unset (probed: "/.config/..." vs ".config/...", equal=false), so diff/doctor and list/up disagreed on the same machine in that state. And `nestor ci` had no fallback at all: it passed cfg.Dotfiles.Source straight through, so a config relying on the default silently skipped template-src existence checks — a src missing from disk validated clean, then failed at deploy.
+- Fix: config.DefaultDotfilesSource() (Join spelling, HOME-tolerant); all seven sites delegate; ci falls back before calling ci.Validate.
+- 2 new tests: helper contract under HOME (absolute, correct join); ci end-to-end — unset dotfiles.source + absent src now yields the missing-src warning, and the same config with the src present validates clean (control pins the warning isn't a false positive). Divergence of the old spellings proven with a throwaway probe test before removal.
+- 443 test functions across 15/15 packages (+2), race clean on cmd+config, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
