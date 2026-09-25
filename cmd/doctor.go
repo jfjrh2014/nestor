@@ -147,8 +147,7 @@ func runDoctorProfileOut(ctx context.Context, profileName string, w io.Writer) e
 		}
 		source := cfg.Dotfiles.Source
 		if source == "" {
-			home, _ := os.UserHomeDir()
-			source = fmt.Sprintf("%s/.config/nestor/dotfiles", home)
+			source = config.DefaultDotfilesSource()
 		}
 
 		if _, statErr := os.Stat(source); statErr != nil {

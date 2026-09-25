@@ -531,3 +531,21 @@ func TestValidateRejectsOtherUserTilde(t *testing.T) {
 		}
 	})
 }
+
+// TestDefaultDotfilesSource pins the session #87 consolidation: the default
+// dotfiles source dir used to be hand-copied per command with two spellings
+// that disagreed when HOME was unset — filepath.Join built a relative
+// ".config/nestor/dotfiles" while fmt.Sprintf built an absolute
+// "/.config/nestor/dotfiles". The helper is the single spelling.
+func TestDefaultDotfilesSource(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	got := DefaultDotfilesSource()
+	want := filepath.Join(dir, ".config", "nestor", "dotfiles")
+	if got != want {
+		t.Fatalf("DefaultDotfilesSource() = %q, want %q", got, want)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("default source %q is not absolute", got)
+	}
+}

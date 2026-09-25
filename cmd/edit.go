@@ -40,8 +40,7 @@ func runEdit(name string, w io.Writer) error {
 
 	srcDir := cfg.Dotfiles.Source
 	if srcDir == "" {
-		home, _ := os.UserHomeDir()
-		srcDir = filepath.Join(home, ".config", "nestor", "dotfiles")
+		srcDir = config.DefaultDotfilesSource()
 	}
 
 	if err := os.MkdirAll(srcDir, 0o755); err != nil {

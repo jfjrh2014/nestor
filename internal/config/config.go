@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"gopkg.in/yaml.v3"
@@ -63,6 +64,17 @@ type Profile struct {
 	Packages       []string   `yaml:"packages"`
 	Dotfiles       []Template `yaml:"dotfiles"`
 	SecretMappings []Mapping  `yaml:"secrets"`
+}
+
+// DefaultDotfilesSource returns the source directory used when the config
+// does not declare dotfiles.source: ~/.config/nestor/dotfiles. Every command
+// that reads templates resolves the source through this helper — the fallback
+// used to be hand-copied per command with two spellings that disagreed when
+// HOME was unset (filepath.Join built a relative .config/... while
+// fmt.Sprintf built an absolute /.config/...).
+func DefaultDotfilesSource() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "nestor", "dotfiles")
 }
 
 // ValidProfile returns true if a profile with the given name is defined.

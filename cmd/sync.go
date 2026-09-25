@@ -102,8 +102,8 @@ func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
 
 	// Scan dotfiles
 	p.Header("dotfiles")
+	defaultSourceDir := config.DefaultDotfilesSource()
 	home, _ := os.UserHomeDir()
-	defaultSourceDir := filepath.Join(home, ".config", "nestor", "dotfiles")
 	cfg.Dotfiles.Source = defaultSourceDir
 
 	foundDots := scanDotfiles(home)

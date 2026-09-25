@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/dotfiles"
@@ -119,8 +118,7 @@ func runListOut(_ context.Context, profileName string, w io.Writer) error {
 		}
 		source := cfg.Dotfiles.Source
 		if source == "" {
-			home, _ := os.UserHomeDir()
-			source = filepath.Join(home, ".config", "nestor", "dotfiles")
+			source = config.DefaultDotfilesSource()
 		}
 
 		for _, t := range templates {

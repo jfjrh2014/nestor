@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -158,10 +156,9 @@ func dashLoadStatus(cfg *config.Config, profileName string) tea.Cmd {
 			missing = append(missing, s)
 		}
 
-		home, _ := os.UserHomeDir()
 		sourceDir := cfg.Dotfiles.Source
 		if sourceDir == "" {
-			sourceDir = filepath.Join(home, ".config", "nestor", "dotfiles")
+			sourceDir = config.DefaultDotfilesSource()
 		}
 
 		// Reuse the canonical drift detector from internal/dotfiles instead of

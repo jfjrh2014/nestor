@@ -145,8 +145,7 @@ func runDiffOut(ctx context.Context, profileName string, w io.Writer) error {
 		}
 		source := cfg.Dotfiles.Source
 		if source == "" {
-			home, _ := os.UserHomeDir()
-			source = fmt.Sprintf("%s/.config/nestor/dotfiles", home)
+			source = config.DefaultDotfilesSource()
 		}
 
 		present, drifted, absent := 0, 0, 0

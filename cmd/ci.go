@@ -40,7 +40,11 @@ func runCI(w io.Writer) error {
 		return fmt.Errorf("ci: %w", err)
 	}
 
-	report := ci.Validate(cfg, cfg.Dotfiles.Source)
+	dotfilesSource := cfg.Dotfiles.Source
+	if dotfilesSource == "" {
+		dotfilesSource = config.DefaultDotfilesSource()
+	}
+	report := ci.Validate(cfg, dotfilesSource)
 
 	if ciQuiet && !report.HasErrors() {
 		// quiet mode: no output on success
