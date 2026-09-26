@@ -219,8 +219,8 @@ func TestBrewfileSearchFindsDotBrewfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
-	if len(res.Packages) != 1 || res.Packages[0] != "homebrew: git" {
-		t.Errorf("packages: got %v, want [homebrew: git]", res.Packages)
+	if len(res.Packages) != 1 || res.Packages[0] != "brew: git" {
+		t.Errorf("packages: got %v, want [brew: git]", res.Packages)
 	}
 }
 

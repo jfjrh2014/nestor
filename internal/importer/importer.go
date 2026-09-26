@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/packages"
 )
 
 // Result holds what was imported.
@@ -103,11 +104,17 @@ func (b *Brewfile) Import() (*Result, error) {
 
 		switch kind {
 		case "tap":
-			res.Packages = append(res.Packages, "homebrew/tap: "+name)
+			// A tap is a formula repository, not an installable package —
+			// brew pulls from it on demand when a formula or cask needs
+			// it. Listing it as a package made every import unrunnable:
+			// no manager dispatches "homebrew/tap".
+			res.Skipped++
 		case "brew":
-			res.Packages = append(res.Packages, "homebrew: "+name)
+			// Canonical spec ("brew", not "homebrew") — packages.ParseSpec
+			// maps the legacy alias for configs written by older imports.
+			res.Packages = append(res.Packages, "brew: "+name)
 		case "cask":
-			res.Packages = append(res.Packages, "homebrew/cask: "+name)
+			res.Packages = append(res.Packages, "brew/cask: "+name)
 		case "mas":
 			// Mac App Store - skip
 			res.Skipped++
@@ -270,20 +277,27 @@ func (y *Yadm) Import() (*Result, error) {
 }
 
 // MergeResult merges an import result into a config.
-// Deduplicates packages and dotfiles that already exist.
-// Returns the count of new items added.
+// Deduplicates packages and dotfiles that already exist. Packages dedup by
+// parsed spec (manager canonicalized, name) so a legacy "homebrew: git"
+// entry from a pre-unification config doesn't duplicate beside the
+// importer's canonical "brew: git". Returns the count of new items added.
 func MergeResult(cfg *config.Config, res *Result) int {
 	added := 0
 
 	// packages
+	pkgKey := func(raw string) string {
+		s := packages.ParseSpec(raw, "")
+		return s.Manager + "/" + s.Name
+	}
 	existingPkgs := map[string]bool{}
 	for _, p := range cfg.Packages.Common {
-		existingPkgs[p] = true
+		existingPkgs[pkgKey(p)] = true
 	}
 	for _, p := range res.Packages {
-		if !existingPkgs[p] {
+		k := pkgKey(p)
+		if !existingPkgs[k] {
 			cfg.Packages.Common = append(cfg.Packages.Common, p)
-			existingPkgs[p] = true
+			existingPkgs[k] = true
 			added++
 		}
 	}

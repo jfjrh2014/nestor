@@ -137,8 +137,8 @@ func TestImportBrewfileDryRunOutput(t *testing.T) {
 	for _, want := range []string{
 		"source = brewfile",
 		"packages found: 3",
-		"+ homebrew: ripgrep",
-		"+ homebrew/cask: visual-studio-code",
+		"+ brew: ripgrep",
+		"+ brew/cask: visual-studio-code",
 		"skipped: 1",
 		"(dry-run, nothing written)",
 	} {
@@ -216,7 +216,7 @@ func TestImportBrewfileImportAndWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(raw)
-	for _, want := range []string{"homebrew: ripgrep", "homebrew: fd", "homebrew/cask: visual-studio-code"} {
+	for _, want := range []string{"brew: ripgrep", "brew: fd", "brew/cask: visual-studio-code"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("config file missing %q after import", want)
 		}

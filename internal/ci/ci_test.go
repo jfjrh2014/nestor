@@ -131,6 +131,25 @@ func TestValidateDotfilesSourceExists(t *testing.T) {
 	}
 }
 
+func TestValidatePackagesHomebrewAliasNotWarned(t *testing.T) {
+	// The legacy "homebrew:" spelling (pre-unification imports) and the
+	// canonical "brew:"/"brew/cask:" must both pass the manager check
+	// silently — ParseSpec canonicalizes the alias before KnownManager
+	// sees it, so the validator can never disagree with the dispatcher.
+	cfg := &config.Config{
+		Version: 1,
+		Packages: config.Packages{
+			Common: []string{"homebrew: git", "brew: ripgrep", "brew/cask: firefox"},
+		},
+	}
+	r := Validate(cfg, "")
+	for _, f := range r.Findings {
+		if f.Category == "packages" {
+			t.Errorf("unexpected packages finding for known manager: %+v", f)
+		}
+	}
+}
+
 func TestValidatePackagesUnknownManager(t *testing.T) {
 	cfg := &config.Config{
 		Version: 1,

@@ -34,29 +34,60 @@ brew "neovim"
 		t.Fatalf("Import: %v", err)
 	}
 
-	// git, ripgrep, neovim (brew) + visual-studio-code (cask) + hashicorp/tap (tap) = 5
-	wantPkgs := 5
+	// git, ripgrep, neovim (brew) + visual-studio-code (cask) = 4; the tap
+	// and the mas entry are skipped — a tap is a formula repository, not an
+	// installable package, and no manager dispatches "homebrew/tap".
+	wantPkgs := 4
 	if got := len(res.Packages); got != wantPkgs {
 		t.Errorf("packages: got %d (%v), want %d", got, res.Packages, wantPkgs)
 	}
 
-	// mas entry should be skipped
-	if res.Skipped != 1 {
-		t.Errorf("skipped: got %d, want 1 (mas entry)", res.Skipped)
+	// mas entry + tap entry should be skipped
+	if res.Skipped != 2 {
+		t.Errorf("skipped: got %d, want 2 (mas + tap entries)", res.Skipped)
 	}
 
-	// verify homebrew: prefix on brew entries
+	// verify canonical brew: prefix on brew entries (the dialect the
+	// packages dispatcher actually speaks)
 	for _, p := range res.Packages {
 		switch {
-		case strings.Contains(p, "git") && !strings.Contains(p, "tap"):
-			if p != "homebrew: git" {
-				t.Errorf("git package: got %q, want %q", p, "homebrew: git")
+		case strings.Contains(p, "git"):
+			if p != "brew: git" {
+				t.Errorf("git package: got %q, want %q", p, "brew: git")
 			}
 		case strings.Contains(p, "visual-studio-code"):
-			if p != "homebrew/cask: visual-studio-code" {
+			if p != "brew/cask: visual-studio-code" {
 				t.Errorf("cask: got %q", p)
 			}
 		}
+	}
+}
+
+func TestBrewfileTapIsNotAPackage(t *testing.T) {
+	// Regression: taps used to be emitted as "homebrew/tap: <name>"
+	// package specs. No backend dispatches that manager, so every
+	// imported config failed 'nestor up' with "unsupported package
+	// manager: homebrew/tap". Taps are formula repositories brew pulls
+	// from on demand — they must not enter the package list.
+	dir := t.TempDir()
+	brewfile := "tap \"hashicorp/tap\"\ntap \"homebrew/bundle\"\n"
+	path := filepath.Join(dir, "Brewfile")
+	if err := os.WriteFile(path, []byte(brewfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bf, err := NewBrewfile(path)
+	if err != nil {
+		t.Fatalf("NewBrewfile: %v", err)
+	}
+	res, err := bf.Import()
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(res.Packages) != 0 {
+		t.Errorf("packages: got %v, want none (taps are not packages)", res.Packages)
+	}
+	if res.Skipped != 2 {
+		t.Errorf("skipped: got %d, want 2 (both taps)", res.Skipped)
 	}
 }
 
@@ -71,7 +102,10 @@ brew "neovim"
 	bf, _ := NewBrewfile(path)
 	res, _ := bf.Import()
 
-	// config already has "homebrew: git" (same format the brewfile importer produces)
+	// config already has the LEGACY "homebrew: git" spelling (what the
+	// brewfile importer wrote before import and install spoke the same
+	// dialect). Merge dedups by parsed spec, so the canonical "brew: git"
+	// the importer now produces must NOT duplicate beside it.
 	cfg := &config.Config{
 		Packages: config.Packages{
 			Common: []string{"homebrew: git", "homebrew: curl"},
@@ -80,13 +114,18 @@ brew "neovim"
 
 	added := MergeResult(cfg, res)
 	if added != 1 {
-		t.Errorf("added: got %d, want 1 (neovim is new, git already exists)", added)
+		t.Errorf("added: got %d, want 1 (neovim is new; legacy homebrew: git dedups against brew: git)", added)
+	}
+	for _, p := range cfg.Packages.Common {
+		if p == "brew: git" {
+			t.Errorf("canonical git entry duplicated beside its legacy spelling: %v", cfg.Packages.Common)
+		}
 	}
 
 	// verify neovim was added
 	found := false
 	for _, p := range cfg.Packages.Common {
-		if p == "homebrew: neovim" {
+		if p == "brew: neovim" {
 			found = true
 		}
 	}

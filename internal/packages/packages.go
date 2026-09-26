@@ -35,7 +35,10 @@ type Spec struct {
 }
 
 // ParseSpec parses "name", "manager: name", or "manager/sub: name".
-// defaultManager is used when no explicit manager is given.
+// defaultManager is used when no explicit manager is given. The legacy
+// "homebrew" alias (what 'nestor import brewfile' wrote before import and
+// install spoke the same dialect) canonicalizes to "brew" so configs
+// written by older imports still dispatch to the brew backend.
 func ParseSpec(raw, defaultManager string) Spec {
 	raw = strings.TrimSpace(raw)
 	s := Spec{Raw: raw, Manager: defaultManager, Name: raw}
@@ -50,7 +53,22 @@ func ParseSpec(raw, defaultManager string) Spec {
 			s.Manager = left
 		}
 	}
+	if s.Manager == "homebrew" {
+		s.Manager = "brew"
+	}
 	return s
+}
+
+// KnownManager reports whether name is a manager nestor can dispatch to.
+// Shared by the ci validator and any other consumer that needs the same
+// allowlist the installer uses — the two lists previously lived apart and
+// drifted apart.
+func KnownManager(name string) bool {
+	switch name {
+	case "brew", "apt", "dnf", "pacman", "snap":
+		return true
+	}
+	return false
 }
 
 // Resolver merges the common package list with the platform-specific one.
@@ -106,6 +124,9 @@ type Manager interface {
 
 // NewManager picks the right Manager implementation by name.
 func NewManager(name string) (Manager, error) {
+	if !KnownManager(name) {
+		return nil, fmt.Errorf("unsupported package manager: %s", name)
+	}
 	switch name {
 	case "brew":
 		return brewMgr{}, nil
@@ -115,10 +136,8 @@ func NewManager(name string) (Manager, error) {
 		return dnfMgr{}, nil
 	case "pacman":
 		return pacmanMgr{}, nil
-	case "snap":
-		return snapMgr{}, nil
 	default:
-		return nil, fmt.Errorf("unsupported package manager: %s", name)
+		return snapMgr{}, nil
 	}
 }
 
@@ -180,6 +199,12 @@ func InstallAll(specs []Spec, defaultManager string) []Result {
 type brewMgr struct{}
 
 func (brewMgr) IsInstalled(s Spec) (bool, error) {
+	// A tap is a formula repository, not an installable package; brew
+	// pulls from it on demand. Report it present so sync/diff never flag
+	// a tap line as missing and try to "install" it.
+	if s.Sub == "tap" {
+		return true, nil
+	}
 	flag := "--formula"
 	if s.Sub == "cask" {
 		flag = "--cask"
@@ -189,6 +214,11 @@ func (brewMgr) IsInstalled(s Spec) (bool, error) {
 }
 
 func (brewMgr) Install(s Spec) error {
+	// Defensive: IsInstalled short-circuits taps, but a direct Install
+	// must never build "brew install --tap x" — that flag does not exist.
+	if s.Sub == "tap" {
+		return fmt.Errorf("brew taps are not installable packages (%s); remove the tap entry from the config", s.Name)
+	}
 	args := []string{"install"}
 	if s.Sub != "" {
 		args = append(args, "--"+s.Sub)

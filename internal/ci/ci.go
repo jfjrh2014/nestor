@@ -10,6 +10,7 @@ import (
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/dotfiles"
+	"github.com/jfjrh2014/nestor/internal/packages"
 	"github.com/jfjrh2014/nestor/internal/secrets"
 )
 
@@ -122,15 +123,6 @@ func validateConfig(cfg *config.Config) []Finding {
 	return out
 }
 
-// validPackageManagers lists the manager prefixes we recognise.
-var validPackageManagers = map[string]bool{
-	"brew":   true,
-	"apt":    true,
-	"dnf":    true,
-	"pacman": true,
-	"snap":   true,
-}
-
 func validatePackages(cfg *config.Config) []Finding {
 	var out []Finding
 
@@ -143,14 +135,14 @@ func validatePackages(cfg *config.Config) []Finding {
 	seen := map[string]bool{} // dedup per-category warnings
 	for _, list := range all {
 		for _, raw := range list {
-			spec := parsePkgSpec(raw)
-			if spec.manager != "" && !validPackageManagers[spec.manager] {
-				key := spec.manager + ":" + raw
+			spec := packages.ParseSpec(raw, "")
+			if spec.Manager != "" && !packages.KnownManager(spec.Manager) {
+				key := spec.Manager + ":" + raw
 				if !seen[key] {
 					out = append(out, Finding{
 						SeverityWarning,
 						"packages",
-						fmt.Sprintf("unknown package manager %q in spec %q", spec.manager, raw),
+						fmt.Sprintf("unknown package manager %q in spec %q", spec.Manager, raw),
 					})
 					seen[key] = true
 				}
@@ -161,14 +153,14 @@ func validatePackages(cfg *config.Config) []Finding {
 	// check for profile packages too
 	for name, prof := range cfg.Profiles {
 		for _, raw := range prof.Packages {
-			spec := parsePkgSpec(raw)
-			if spec.manager != "" && !validPackageManagers[spec.manager] {
-				key := name + ":" + spec.manager
+			spec := packages.ParseSpec(raw, "")
+			if spec.Manager != "" && !packages.KnownManager(spec.Manager) {
+				key := name + ":" + spec.Manager
 				if !seen[key] {
 					out = append(out, Finding{
 						SeverityWarning,
 						"packages",
-						fmt.Sprintf("unknown package manager %q in profile %q spec %q", spec.manager, name, raw),
+						fmt.Sprintf("unknown package manager %q in profile %q spec %q", spec.Manager, name, raw),
 					})
 					seen[key] = true
 				}
@@ -177,28 +169,6 @@ func validatePackages(cfg *config.Config) []Finding {
 	}
 
 	return out
-}
-
-type parsedSpec struct {
-	manager string
-	sub     string
-	name    string
-}
-
-func parsePkgSpec(raw string) parsedSpec {
-	raw = trimSpace(raw)
-	s := parsedSpec{name: raw}
-	if idx := indexByte(raw, ':'); idx >= 0 {
-		left := trimSpace(raw[:idx])
-		s.name = trimSpace(raw[idx+1:])
-		if slash := indexByte(left, '/'); slash >= 0 {
-			s.manager = left[:slash]
-			s.sub = left[slash+1:]
-		} else {
-			s.manager = left
-		}
-	}
-	return s
 }
 
 func validateDotfiles(cfg *config.Config, source string) []Finding {
@@ -341,29 +311,6 @@ func validateProfiles(cfg *config.Config, dotfilesSource string) []Finding {
 	}
 
 	return out
-}
-
-// Minimal string helpers to avoid importing strings (keep deps lean in tests).
-
-func trimSpace(s string) string {
-	start := 0
-	for start < len(s) && (s[start] == ' ' || s[start] == '\t') {
-		start++
-	}
-	end := len(s)
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
-	}
-	return s[start:end]
-}
-
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
 }
 
 func osErrText(err error) string {
