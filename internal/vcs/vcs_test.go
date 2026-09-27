@@ -737,3 +737,126 @@ func TestIsLocalRemotePathScpSyntax(t *testing.T) {
 		}
 	}
 }
+
+// TestHeadVerdict pins the HEAD classification contract across all five
+// states, including the zero-branch-with-advertised-symref shape only a
+// real server can produce (offline transports never advertise an unborn
+// symref — probed over path and file://): the documented "still empty —
+// nothing to clone yet, nothing to heal" line, which the pre-fix code
+// violated by reporting a bare remote with an unborn symref as dangling.
+func TestHeadVerdict(t *testing.T) {
+	cases := []struct {
+		name       string
+		advertised string
+		names      []string
+		wantDangl  bool
+		wantAdv    string
+	}{
+		{"empty-remote-no-symref", "", nil, false, ""},
+		{"zero-branches-advertised-unborn", "main", nil, false, "main"},
+		{"advertised-branch-exists", "main", []string{"main"}, false, "main"},
+		{"dangling-advertised-over-branches", "main", []string{"work"}, true, "main"},
+		{"path-local-dangling", "", []string{"masterlocal"}, true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dangling, advertised := headVerdict(tc.advertised, tc.names)
+			if dangling != tc.wantDangl || advertised != tc.wantAdv {
+				t.Errorf("headVerdict(%q, %v) = (%v, %q), want (%v, %q)",
+					tc.advertised, tc.names, dangling, advertised, tc.wantDangl, tc.wantAdv)
+			}
+		})
+	}
+}
+
+// TestDanglingRemoteHEADHealthyFileTransport exercises the symref-resolving
+// branch end-to-end: file:// is the only offline scheme:// transport, and it
+// resolves HEAD when the remote's default branch exists (probed) — the
+// "hosted" parsing path, previously uncovered.
+func TestDanglingRemoteHEADHealthyFileTransport(t *testing.T) {
+	remote := initRemoteRepo(t)
+	if remote == "" {
+		return
+	}
+	// Healthy means HEAD names the branch the push will create — set the
+	// remote's symref to the pushing machine's branch name up front (a
+	// first pusher wins scenario over a symref-resolving transport).
+	setBranchNames(t, "masterlocal")
+	if out, err := exec.Command("git", "-C", remote, "symbolic-ref", "HEAD", "refs/heads/masterlocal").CombinedOutput(); err != nil {
+		t.Fatalf("setting remote HEAD to masterlocal: %v (%s)", err, out)
+	}
+
+	machineA := t.TempDir()
+	if err := Init(machineA); err != nil {
+		t.Fatalf("Init A failed: %v", err)
+	}
+	commitFile(t, machineA, "nestor.yml", "config: FROM-A\n", "initial")
+	if err := SetRemote(machineA, "origin", "file://"+remote); err != nil {
+		t.Fatalf("SetRemote failed: %v", err)
+	}
+	if err := Push(machineA, "origin"); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+
+	dangling, advertised := DanglingRemoteHEAD(machineA, "origin")
+	if dangling {
+		t.Error("file:// remote with HEAD at an existing branch reported dangling")
+	}
+	if advertised != "masterlocal" {
+		t.Errorf("file:// transport should resolve the symref once HEAD exists, advertised = %q, want masterlocal", advertised)
+	}
+	// HealRemoteHEAD on a healthy remote is a silent no-op, on any transport.
+	if advisory, err := HealRemoteHEAD(machineA, "origin"); err != nil || advisory != "" {
+		t.Errorf("heal on healthy remote = (%q, %v), want (\"\", nil)", advisory, err)
+	}
+}
+
+// TestHealRemoteHEADFileTransportDanglingAdvisory covers the advisory
+// branch for a non-path URL: over file:// (the only offline scheme://
+// transport) a dangling HEAD does NOT resolve its symref (probed — the
+// ref: line appears only when HEAD's target exists), so the state reads
+// as dangling with advertised="". HealRemoteHEAD must return the
+// settings-change advisory — never an error, never an attempt to repair
+// a URL it cannot reach as a path. The advertised-name advisory shape
+// itself needs a real server and is pinned at headVerdict level instead.
+func TestHealRemoteHEADFileTransportDanglingAdvisory(t *testing.T) {
+	remote := initRemoteRepo(t)
+	if remote == "" {
+		return
+	}
+	if out, err := exec.Command("git", "-C", remote, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("setting remote HEAD to main: %v (%s)", err, out)
+	}
+	setBranchNames(t, "masterlocal")
+
+	machineA := t.TempDir()
+	if err := Init(machineA); err != nil {
+		t.Fatalf("Init A failed: %v", err)
+	}
+	commitFile(t, machineA, "nestor.yml", "config: FROM-A\n", "initial")
+	if err := SetRemote(machineA, "origin", "file://"+remote); err != nil {
+		t.Fatalf("SetRemote failed: %v", err)
+	}
+	if err := Push(machineA, "origin"); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+
+	dangling, advertised := DanglingRemoteHEAD(machineA, "origin")
+	if !dangling || advertised != "" {
+		t.Fatalf("expected dangling with empty advertised over file://, got (%v, %q)", dangling, advertised)
+	}
+
+	advisory, err := HealRemoteHEAD(machineA, "origin")
+	if err != nil {
+		t.Fatalf("file:// dangling must not error: %v", err)
+	}
+	want := "remote HEAD is dangling (names a branch that does not exist)"
+	if !strings.HasPrefix(advisory, want) {
+		t.Errorf("advisory = %q, want prefix %q", advisory, want)
+	}
+	// The cure is a host setting, not something nestor can do from here:
+	// the remote HEAD must still be dangling after the call.
+	if dangling2, _ := DanglingRemoteHEAD(machineA, "origin"); !dangling2 {
+		t.Error("remote HEAD unexpectedly healed by an advisory-only call")
+	}
+}

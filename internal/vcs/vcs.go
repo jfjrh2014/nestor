@@ -395,15 +395,30 @@ func DanglingRemoteHEAD(dir, remote string) (bool, string) {
 			names = append(names, strings.TrimPrefix(fields[1], "refs/heads/"))
 		}
 	}
-	if advertised != "" {
-		for _, n := range names {
-			if n == advertised {
-				return false, advertised // advertised branch exists: healthy
-			}
-		}
-		return true, advertised
+	return headVerdict(advertised, names)
+}
+
+// headVerdict classifies a remote HEAD state: dangling reports whether HEAD
+// names a branch that has no refs on the remote, and advertised echoes the
+// symref the transport resolved ("" when it did not). A zero-branch remote is
+// never dangling — nothing to clone yet, nothing to heal — even when the
+// transport advertises the unborn HEAD symref. A dangling advertised HEAD
+// over real branches is the actionable kind: the remote's default branch was
+// renamed (or its first push created a different name) and every fresh clone
+// will check out nothing until HEAD is re-pointed.
+func headVerdict(advertised string, names []string) (bool, string) {
+	if advertised == "" {
+		return len(names) >= 1, ""
 	}
-	return len(names) >= 1, ""
+	if len(names) == 0 {
+		return false, advertised
+	}
+	for _, n := range names {
+		if n == advertised {
+			return false, advertised // advertised branch exists: healthy
+		}
+	}
+	return true, advertised
 }
 
 // HealRemoteHEAD repairs a dangling remote HEAD by pointing it at the
