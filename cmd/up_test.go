@@ -258,7 +258,7 @@ func TestUpShellPluginEntryResolved(t *testing.T) {
 	}
 	body := string(content)
 	pluginsRoot := filepath.Join(home, ".config", "nestor", "plugins")
-	want := "source " + filepath.Join(pluginsRoot, "alias-tips", "alias-tips.plugin.zsh")
+	want := "source " + filepath.Join(pluginsRoot, "djui", "alias-tips", "alias-tips.plugin.zsh")
 	if !strings.Contains(body, want) {
 		t.Errorf("rc missing resolved entry %q:\n%s", want, body)
 	}

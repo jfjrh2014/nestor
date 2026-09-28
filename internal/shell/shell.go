@@ -128,7 +128,10 @@ func InstallPlugins(rawPlugins []string) []PluginResult {
 			continue
 		}
 
-		localPath := filepath.Join(pluginsDir, p.Repo)
+		// Owner in the path: two plugins sharing a repo name under different
+		// owners must not share one clone dir, or the second silently pulls
+		// and sources the first owner's repo.
+		localPath := filepath.Join(pluginsDir, p.Owner, p.Repo)
 		err := cloneOrUpdate(p.Owner, p.Repo, localPath)
 		if err != nil {
 			results = append(results, PluginResult{Plugin: p, Status: StatusError, Err: err})

@@ -537,3 +537,49 @@ func TestWriteSourceBlock_KeepsExistingMode(t *testing.T) {
 		t.Fatalf("user lines lost: %q", data)
 	}
 }
+
+// TestInstallPlugins_SameRepoDifferentOwners is the session #90 regression:
+// the clone dir is keyed on owner/repo, so two plugins sharing a repo name
+// under different owners get separate clones instead of the second silently
+// reusing (and sourcing) the first owner's repo.
+func TestInstallPlugins_SameRepoDifferentOwners(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	acme := fixtureRepo(t)
+	other := fixtureRepo(t)
+	orig := cloneURLFn
+	cloneURLFn = func(owner, repo string) string {
+		if owner == "acme" {
+			return acme
+		}
+		return other
+	}
+	t.Cleanup(func() { cloneURLFn = orig })
+
+	results := InstallPlugins([]string{"acme/tool", "other/tool"})
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	for i, r := range results {
+		if r.Status != StatusInstalled {
+			t.Fatalf("plugin %d: status=%d, err=%v", i, r.Status, r.Err)
+		}
+	}
+	if results[0].Path == results[1].Path {
+		t.Fatalf("both owners cloned into the same dir %s; the second reuses the first's repo", results[0].Path)
+	}
+	// Each clone holds the .git of its own source repo.
+	for i, r := range results {
+		if fi, err := os.Stat(filepath.Join(r.Path, ".git")); err != nil || !fi.IsDir() {
+			t.Errorf("plugin %d: expected a real clone at %s, err=%v", i, r.Path, err)
+		}
+	}
+	want0 := filepath.Join("plugins", "acme", "tool")
+	if !strings.HasSuffix(filepath.ToSlash(results[0].Path), want0) {
+		t.Errorf("acme/tool path = %q, want suffix %q", results[0].Path, want0)
+	}
+	want1 := filepath.Join("plugins", "other", "tool")
+	if !strings.HasSuffix(filepath.ToSlash(results[1].Path), want1) {
+		t.Errorf("other/tool path = %q, want suffix %q", results[1].Path, want1)
+	}
+}
