@@ -1062,3 +1062,11 @@ profiles:
 - Test-draft lessons: heredoc `\"` through a python replace turns into a bare quote (string literal break — repaired by splice); the first "healthy" fixture set remote HEAD to a branch the push never created, which correctly read dangling — fixture bug, not code bug.
 - 452 test functions across 15/15 packages (+3, git grep HEAD 449), race clean on vcs, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. HealRemoteHEAD 57.1%→78.6%, headVerdict 100%.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-28 — Daily dev session #90 — shell plugins clone into owner-scoped dirs
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Coverage map led nowhere: every <60% non-glue function is a production adapter (execRunner, cmdOut) or a trivial accessor tests mock out. Ignored-error sweep: all three hits are best-effort by design (litter cleanup, dir pre-creation, home fallback). Layer-parity: ci now validates profiles fully (packages, dotfiles via templateFindings, secrets incl. the no-provider guard); only glue commands lack profile paths, which is by design. push/sync/rollback overwrites and restore guards all audited clean — Commit already no-ops on a clean tree.
+- Bug: shell.InstallPlugins keyed the clone dir on p.Repo alone (plugins/<repo>). Two plugins sharing a repo name under different owners collapse into one dir — the second run finds the first owner's .git, silently `git pull`s instead of cloning, reports installed, and rc sourcing (keyed on the same path) then sources the wrong owner's plugin in every future shell. Silent wrong behavior, invisible until a plugin misbehaves.
+- Fix: clone dir is plugins/<owner>/<repo>. All consumers ride InstallPlugins' returned Path, so SourceLines and the rc block follow; legacy flat dirs become inert litter (no migration, so a legacy dir cloned from the wrong owner can't survive under the new name either).
+- 1 new test: same-repo-different-owners regression — two fixtures, distinct clone paths, real .git in each, owner-segment path suffix asserted end-to-end. up_test's rc assertion updated deliberately to the owner-scoped path.
+- 453 test functions across 15/15 packages (+1, git grep HEAD 452), race clean on shell, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
