@@ -55,6 +55,31 @@ func IsUnborn(dir string) bool {
 	return unborn(dir)
 }
 
+// advertisedSymref parses `git ls-remote --symref <remote> HEAD` output.
+// It returns the advertised default branch name and whether that symref is
+// unborn: real servers follow the symref line with an all-zero object id
+// when HEAD names the not-yet-set default of a still-empty repo (probed —
+// path-local transports advertise nothing when HEAD dangles, so the
+// zero-oid shape only arrives from a hosted remote). A missing symref
+// line reports ("", false).
+func advertisedSymref(out string) (string, bool) {
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "ref:" && strings.HasPrefix(fields[1], "refs/heads/") {
+			unborn := false
+			if i+1 < len(lines) {
+				oid := strings.Fields(lines[i+1])
+				if len(oid) >= 1 && strings.Trim(oid[0], "0") == "" {
+					unborn = true
+				}
+			}
+			return strings.TrimPrefix(fields[1], "refs/heads/"), unborn
+		}
+	}
+	return "", false
+}
+
 // RemoteDefaultBranch returns the branch remote pulls should read from and
 // unborn pushes should adopt: the remote's advertised HEAD branch when it
 // resolves, else the remote's only branch — a dangling HEAD over exactly
@@ -65,11 +90,8 @@ func IsUnborn(dir string) bool {
 func RemoteDefaultBranch(dir, remote string) string {
 	out, err := exec.Command("git", "-C", dir, "ls-remote", "--symref", remote, "HEAD").Output()
 	if err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 && fields[0] == "ref:" && strings.HasPrefix(fields[1], "refs/heads/") {
-				return strings.TrimPrefix(fields[1], "refs/heads/")
-			}
+		if name, unborn := advertisedSymref(string(out)); name != "" && !unborn {
+			return name
 		}
 	}
 	heads, err := exec.Command("git", "-C", dir, "ls-remote", "--heads", remote).Output()
@@ -376,14 +398,7 @@ func DanglingRemoteHEAD(dir, remote string) (bool, string) {
 	if err != nil {
 		return false, ""
 	}
-	advertised := ""
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == "ref:" && strings.HasPrefix(fields[1], "refs/heads/") {
-			advertised = strings.TrimPrefix(fields[1], "refs/heads/")
-			break
-		}
-	}
+	advertised, _ := advertisedSymref(string(out))
 	heads, err := exec.Command("git", "-C", dir, "ls-remote", "--heads", remote).Output()
 	if err != nil {
 		return false, advertised

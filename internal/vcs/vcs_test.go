@@ -860,3 +860,37 @@ func TestHealRemoteHEADFileTransportDanglingAdvisory(t *testing.T) {
 		t.Error("remote HEAD unexpectedly healed by an advisory-only call")
 	}
 }
+
+// TestAdvertisedSymref pins the ls-remote --symref parse shared by
+// RemoteDefaultBranch and DanglingRemoteHEAD. The zero-oid row is the
+// session #91 regression: a hosted remote advertises its default with an
+// all-zero object id while the repo is still empty (probed — path-local
+// transports advertise nothing when HEAD dangles). The pre-fix parser
+// treated such a name as resolved, so RemoteDefaultBranch returned a
+// dangling default over a real sole branch and alignUnbornWithRemote
+// repointed the unborn local at it — the first push then forked history
+// across two branches, the exact disease the alignment exists to prevent.
+func TestAdvertisedSymref(t *testing.T) {
+	zero := strings.Repeat("0", 40)
+	oid := strings.Repeat("a", 40)
+	cases := []struct {
+		name       string
+		out        string
+		wantBranch string
+		wantUnborn bool
+	}{
+		{"resolved", "ref: refs/heads/main\tHEAD\n" + oid + "\tHEAD\n", "main", false},
+		{"unborn-zero-oid", "ref: refs/heads/main\tHEAD\n" + zero + "\tHEAD\n", "main", true},
+		{"no-symref-line", oid + "\tHEAD\n", "", false},
+		{"empty-output", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			branch, unborn := advertisedSymref(tc.out)
+			if branch != tc.wantBranch || unborn != tc.wantUnborn {
+				t.Errorf("advertisedSymref = (%q, %v), want (%q, %v)",
+					branch, unborn, tc.wantBranch, tc.wantUnborn)
+			}
+		})
+	}
+}
