@@ -1070,3 +1070,11 @@ profiles:
 - 1 new test: same-repo-different-owners regression — two fixtures, distinct clone paths, real .git in each, owner-segment path suffix asserted end-to-end. up_test's rc assertion updated deliberately to the owner-scoped path.
 - 453 test functions across 15/15 packages (+1, git grep HEAD 452), race clean on shell, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-09-29 — Daily dev session #91 — an unborn advertised default is not a resolved one
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Contract-audit session: IsUnborn/alignUnbornWithRemote had no audit after #89's DanglingRemoteHEAD work; the doc/code mismatch was one layer down, in RemoteDefaultBranch.
+- Bug: RemoteDefaultBranch's doc says the advertised HEAD branch wins "when it resolves", else the sole-branch fallback ("dangling HEAD over exactly one real branch is unambiguous"). The code returned the advertised name unconditionally. Probes: ls-remote --symref distinguishes unborn from resolved by the oid line — real servers follow the ref: line with an all-zero oid on an empty repo (path-local transports advertise nothing when dangling, so the zero-oid shape is hosted-only). On a hosted remote whose default was never moved off main (HEAD advertises main, sole real branch work), an unborn local was repointed at the dangling main and the first push forked history across two branches — the exact disease alignUnbornWithRemote exists to prevent.
+- Fix: advertisedSymref(out) parses the symref line and its oid line; unborn zero-oid advertisements fall through to the single-branch fallback. RemoteDefaultBranch and DanglingRemoteHEAD both delegate (one parse, two consumers).
+- 1 new test: TestAdvertisedSymref table — resolved / unborn-zero-oid / no-symref-line / empty-output. Hosted-only shape pinned at pure-function level per the #89 pattern.
+- 454 test functions across 15/15 packages (+1, git grep HEAD 453), race clean on vcs, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
