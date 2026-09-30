@@ -82,17 +82,23 @@ func advertisedSymref(out string) (string, bool) {
 
 // RemoteDefaultBranch returns the branch remote pulls should read from and
 // unborn pushes should adopt: the remote's advertised HEAD branch when it
-// resolves, else the remote's only branch — a dangling HEAD over exactly
+// resolves; else the remote's only branch — a dangling HEAD over exactly
 // one real branch is unambiguous, and is the shape of a repo whose default
 // was never moved off main after a client pushed differently-named work,
-// and of fresh local bare clones. Returns "" when the remote is empty,
-// unreachable, or genuinely ambiguous.
+// and of fresh local bare clones; else, on a still-empty hosted remote
+// (zero real branches), the unborn advertisement itself — the only name
+// the remote offers, and the master-vs-main default the first push should
+// adopt. Returns "" when the remote is unreachable or genuinely ambiguous
+// (a dangling advertisement over multiple real branches, or no
+// advertisement over zero branches).
 func RemoteDefaultBranch(dir, remote string) string {
 	out, err := exec.Command("git", "-C", dir, "ls-remote", "--symref", remote, "HEAD").Output()
+	advertised, unborn := "", false
 	if err == nil {
-		if name, unborn := advertisedSymref(string(out)); name != "" && !unborn {
-			return name
-		}
+		advertised, unborn = advertisedSymref(string(out))
+	}
+	if advertised != "" && !unborn {
+		return advertised
 	}
 	heads, err := exec.Command("git", "-C", dir, "ls-remote", "--heads", remote).Output()
 	if err != nil {
@@ -105,10 +111,31 @@ func RemoteDefaultBranch(dir, remote string) string {
 			names = append(names, strings.TrimPrefix(fields[1], "refs/heads/"))
 		}
 	}
-	if len(names) == 1 {
-		return names[0]
+	return defaultBranchDecision(advertised, unborn, names)
+}
+
+// defaultBranchDecision resolves the remote's default branch from the
+// advertised HEAD symref and the remote's real branch list. A resolved
+// advertisement wins outright. An unborn advertisement (zero-oid — probed:
+// only hosted transports produce it) is the only name a still-empty remote
+// offers, so it wins when no real branches exist; over any real branch it
+// is the ambiguous dangling-default shape and the sole-branch fallback
+// decides instead.
+func defaultBranchDecision(advertised string, advertisedUnborn bool, names []string) string {
+	if advertised != "" && !advertisedUnborn {
+		return advertised
 	}
-	return ""
+	switch len(names) {
+	case 0:
+		if advertised != "" && advertisedUnborn {
+			return advertised
+		}
+		return ""
+	case 1:
+		return names[0]
+	default:
+		return ""
+	}
 }
 
 // alignUnbornWithRemote points an unborn local branch at the remote's
@@ -125,10 +152,15 @@ func alignUnbornWithRemote(dir, localBranch, remote string) error {
 	if remoteBranch == "" || remoteBranch == localBranch {
 		return nil
 	}
-	// HEAD is unborn, so re-pointing it moves nothing.
-	out, err := exec.Command("git", "-C", dir, "symbolic-ref", "HEAD", "refs/heads/"+remoteBranch).CombinedOutput()
+	return pointHeadAt(dir, remoteBranch)
+}
+
+// pointHeadAt points an unborn repo's HEAD at refs/heads/<branch> without
+// touching any ref value: HEAD is unborn, so re-pointing it moves nothing.
+func pointHeadAt(dir, branch string) error {
+	out, err := exec.Command("git", "-C", dir, "symbolic-ref", "HEAD", "refs/heads/"+branch).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("aligning with remote branch %q: %w (%s)", remoteBranch, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("aligning with remote branch %q: %w (%s)", branch, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

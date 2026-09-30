@@ -894,3 +894,126 @@ func TestAdvertisedSymref(t *testing.T) {
 		})
 	}
 }
+
+// TestDefaultBranchDecision pins the full resolution contract, including
+// the regression this session fixes: an unborn advertisement (zero-oid,
+// hosted-only per the probes) over a still-empty remote is the only name
+// the remote offers, so it must be adopted — the pre-fix fall-through
+// discarded it, the align feature no-op'd on the exact master-vs-main
+// shape it exists for, and the re-point branch ran in no test.
+func TestDefaultBranchDecision(t *testing.T) {
+	cases := []struct {
+		name   string
+		adv    string
+		advUnb bool
+		names  []string
+		want   string
+	}{
+		{"resolved-advertisement-wins", "main", false, []string{"other"}, "main"},
+		{"unborn-advertisement-over-empty-remote", "main", true, nil, "main"},
+		{"unborn-advertisement-yields-to-sole-branch", "main", true, []string{"work"}, "work"},
+		{"unborn-advertisement-ambiguous-over-two-branches", "main", true, []string{"work", "play"}, ""},
+		{"no-advertisement-empty-remote", "", false, nil, ""},
+		{"no-advertisement-sole-branch", "", false, []string{"work"}, "work"},
+		{"no-advertisement-two-branches", "", false, []string{"work", "play"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := defaultBranchDecision(tc.adv, tc.advUnb, tc.names); got != tc.want {
+				t.Errorf("defaultBranchDecision(%q, %v, %v) = %q, want %q", tc.adv, tc.advUnb, tc.names, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPointHeadAtRepointsUnbornHead pins the extracted re-point primitive:
+// HEAD moves to the target branch without creating any ref, so the repo
+// stays unborn and the first commit lands on the adopted name.
+func TestPointHeadAtRepointsUnbornHead(t *testing.T) {
+	setBranchNames(t, "masterlocal")
+	dir := t.TempDir()
+	if err := Init(dir); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	if err := pointHeadAt(dir, "main"); err != nil {
+		t.Fatalf("pointHeadAt failed: %v", err)
+	}
+	branch, err := Branch(dir)
+	if err != nil || branch != "main" {
+		t.Fatalf("after re-point Branch = %q (err %v), want main", branch, err)
+	}
+	// Still unborn: no ref was created, only HEAD moved.
+	if out, err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", "HEAD").CombinedOutput(); err == nil {
+		t.Fatalf("re-point created a ref; HEAD resolves to %s", strings.TrimSpace(string(out)))
+	}
+	commitFile(t, dir, "nestor.yml", "config: X\n", "first")
+	branch, err = Branch(dir)
+	if err != nil || branch != "main" {
+		t.Fatalf("first commit after re-point landed on %q (err %v), want main", branch, err)
+	}
+}
+
+// TestAlignAdoptsSoleRemoteBranch exercises alignUnbornWithRemote's re-point
+// branch end-to-end over a path-local remote (the only offline shape that
+// resolves a name for an unborn repo): the remote's HEAD dangles over its
+// single real branch, the unborn machine adopts that name, and the sync
+// lands on the branch the remote actually holds. Coverage map note: the
+// re-point branch had 0% coverage since #91 degenerated the empty-remote
+// align scenario into a no-op.
+func TestAlignAdoptsSoleRemoteBranch(t *testing.T) {
+	remote := initRemoteRepo(t)
+	if remote == "" {
+		return
+	}
+	setBranchNames(t, "masterlocal")
+	// Seed the remote with one real branch named differently from the
+	// machines' default, and leave HEAD dangling over a never-created main.
+	seed := t.TempDir()
+	if err := Init(seed); err != nil {
+		t.Fatalf("Init seed failed: %v", err)
+	}
+	commitFile(t, seed, "nestor.yml", "config: SEED\n", "seed")
+	// Land the seed commit directly on refs/heads/work: pushing the branch
+	// normally would ALSO create masterlocal, and a two-branch remote is
+	// genuinely ambiguous — RemoteDefaultBranch would correctly return ""
+	// (first draft did exactly that, and the test caught its own fixture).
+	rev, err := exec.Command("git", "-C", seed, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("seed rev-parse: %v", err)
+	}
+	out, err := exec.Command("git", "-C", seed, "push", remote, strings.TrimSpace(string(rev))+":refs/heads/work").CombinedOutput()
+	if err != nil {
+		t.Fatalf("creating work branch: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", remote, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("dangling remote HEAD: %v (%s)", err, out)
+	}
+
+	machine := t.TempDir()
+	if err := Init(machine); err != nil {
+		t.Fatalf("Init machine failed: %v", err)
+	}
+	if err := SetRemote(machine, "origin", remote); err != nil {
+		t.Fatalf("SetRemote failed: %v", err)
+	}
+	if err := EnsureUnbornAligned(machine, "origin"); err != nil {
+		t.Fatalf("EnsureUnbornAligned failed: %v", err)
+	}
+	branch, err := Branch(machine)
+	if err != nil || branch != "work" {
+		t.Fatalf("machine on %q (err %v), want adopted remote branch work", branch, err)
+	}
+	// The real flow after adoption: pull merges the remote's history
+	// (unrelated first pull is allowed), then the machine's own commit
+	// pushes fast-forward onto the branch it adopted.
+	if err := Pull(machine, "origin"); err != nil {
+		t.Fatalf("Pull after align failed: %v", err)
+	}
+	commitFile(t, machine, "local.yml", "local\n", "on adopted branch")
+	if err := Push(machine, "origin"); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", remote, "show", "work:local.yml").Output(); err != nil || strings.TrimSpace(string(out)) != "local" {
+		t.Errorf("remote work branch missing machine's commit (got %q, err %v)", string(out), err)
+	}
+}
