@@ -8,6 +8,7 @@ import (
 	"os/exec"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"github.com/jfjrh2014/nestor/internal/secrets"
 	"github.com/jfjrh2014/nestor/internal/ui"
 	"github.com/spf13/cobra"
@@ -257,11 +258,15 @@ func runSecretsCheckProfileOut(ctx context.Context, profileName string, w io.Wri
 
 	// Injection targets
 	p.Header("inject targets")
+	home, _ := os.UserHomeDir()
 	totalTargets := 0
 	for _, m := range mappings {
 		for dest := range m.Inject {
 			totalTargets++
-			if _, statErr := os.Stat(dest); statErr == nil {
+			// Stat the path inject will actually write: ExpandHome here
+			// mirrors injectOne, so an existing ~/... target is reported
+			// as present instead of "will be created".
+			if _, statErr := os.Stat(pathutil.ExpandHome(dest, home)); statErr == nil {
 				p.OK(dest)
 			} else {
 				p.Info(fmt.Sprintf("%s (will be created)", dest))

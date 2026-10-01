@@ -473,3 +473,59 @@ func TestEffectiveSecretMappings(t *testing.T) {
 		})
 	}
 }
+
+// TestSecretsCheckStatTildeTarget is the session #93 regression: the
+// inject-targets loop statted the raw `~/...` string while inject expands
+// it (injectOne -> expandHome), so an EXISTING file at ~/.foo was always
+// reported "(will be created)" — the dry run contradicted what inject
+// would actually do.
+func TestSecretsCheckStatTildeTarget(t *testing.T) {
+	t.Setenv("NESTOR_TEST_KEY", "supersecret")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+
+	// One target that exists under the real HOME, one that does not.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir available")
+	}
+	existing := filepath.Join(home, ".nestor-check-existing")
+	if err := os.WriteFile(existing, []byte("token=x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(existing) })
+
+	writeFile(t, cfgPath, `version: 1
+secrets:
+  provider: env
+  mappings:
+    - key: NESTOR_TEST_KEY
+      inject:
+        ~/.nestor-check-existing: "token={{.NESTOR_TEST_KEY}}"
+        ~/.nestor-check-absent: "token={{.NESTOR_TEST_KEY}}"
+`)
+
+	out := &bytes.Buffer{}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+	if err := runSecretsCheckProfileOut(context.Background(), "", out); err != nil {
+		t.Fatalf("check: %v\n%s", err, out.String())
+	}
+	body := out.String()
+	// The existing target must NOT carry the will-be-created suffix: the
+	// loop stats the expanded path, so it sees the file inject would see.
+	if strings.Contains(body, ".nestor-check-existing (will be created)") {
+		t.Errorf("existing ~/... target misreported as to-be-created:\n%s", body)
+	}
+	// ui colorizes the checkmark, so match on the path itself: present as
+	// a bare line, never with the will-be-created suffix.
+	if !strings.Contains(body, "~/.nestor-check-existing") {
+		t.Errorf("existing ~/... target not reported as present:\n%s", body)
+	}
+	if !strings.Contains(body, "will be created") {
+		t.Fatalf("absent target lost its will-be-created line:\n%s", body)
+	}
+	if strings.Count(body, "will be created") != 1 {
+		t.Errorf("expected exactly one will-be-created line:\n%s", body)
+	}
+}
