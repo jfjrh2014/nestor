@@ -1095,3 +1095,10 @@ profiles:
 - 1 new test: existing ~/.x target reports present (no will-be-created suffix), absent one still reports created, exactly one created-line total. Two draft iterations caught my own assertion bugs: expected the expanded path in output (ui prints the raw tilde path) and the bare checkmark (ui colorizes it — match the path, not the glyph).
 - 458 test functions across 15/15 packages (+1, git grep pending in commit), race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean. runSecretsCheckProfileOut 69.0% -> 76.1%.
 - Next: v0.1 once `gh auth refresh -s workflow` lands.
+### 2026-10-02 — Daily dev session #94 — remote commands get their first contract coverage
+
+- v0.1 still blocked: token scopes re-checked today (no `workflow`). Coverage map: the remaining sub-70% surface is all known glue (0% runX cobra wrappers with working Out-level tests) except two fresh names — resolveBranch 62.5% (read end-to-end against #89-92 contracts: aligned correctly, no bug; its dangling-HEAD error is unreachable through Push/Pull since Commit before push guarantees a branch) and the remote command surface: runRemoteAdd/Show/Remove all 0% with NO remote_test.go at all.
+- Audit result: no defect found. runRemoteAddOut always calls SetRemote, which does set-url on an existing remote — correct update semantics; runRemoteRemoveOut shells git remote remove directly (a second copy of remote vocabulary outside vcs, noted as future consolidation, not a bug — the branch is two lines and fully covered as of today).
+- Ship: 6 new tests, the command's first — add (repo init + remote set), add-update (second add goes through set-url: exactly one origin, new URL wins, old URL provably replaced), show (URL printed / no-remote notice), remove (removed + was-URL / nothing-to-remove). One assertion draft bug caught by the test itself: ui colorizes the URL (the #93 glyph lesson, again — match content, not escape codes).
+- 464 test functions across 15/15 packages (+6), race clean on cmd, gofmt/vet/staticcheck clean, CGO_ENABLED=0 build clean.
+- Next: v0.1 once `gh auth refresh -s workflow` lands.
