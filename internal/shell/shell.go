@@ -117,7 +117,10 @@ func InstallPlugins(rawPlugins []string) []PluginResult {
 		return results
 	}
 
-	_ = os.MkdirAll(pluginsDir, 0755)
+	// A failed mkdir must surface as the plugin result's error: swallowing
+	// it left every clone failing with git's own message ("could not create
+	// work tree dir") instead of the real reason the dir couldn't be made.
+	mkdirErr := os.MkdirAll(pluginsDir, 0755)
 
 	results := make([]PluginResult, 0, len(rawPlugins))
 	for _, raw := range rawPlugins {
@@ -125,6 +128,11 @@ func InstallPlugins(rawPlugins []string) []PluginResult {
 
 		if p.Type != PluginGitHub {
 			results = append(results, PluginResult{Plugin: p, Status: StatusSkipped})
+			continue
+		}
+
+		if mkdirErr != nil {
+			results = append(results, PluginResult{Plugin: p, Status: StatusError, Err: fmt.Errorf("create plugins dir: %w", mkdirErr)})
 			continue
 		}
 

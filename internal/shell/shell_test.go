@@ -583,3 +583,35 @@ func TestInstallPlugins_SameRepoDifferentOwners(t *testing.T) {
 		t.Errorf("other/tool path = %q, want suffix %q", results[1].Path, want1)
 	}
 }
+
+// TestInstallPlugins_MkdirFails pins the session #95 fix: a plugins dir that
+// can't be created must fail each GitHub plugin with the mkdir error itself,
+// not git's downstream "could not create work tree dir" — the old code
+// discarded the mkdir error entirely.
+func TestInstallPlugins_MkdirFails(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(blocker, "config"))
+
+	results := InstallPlugins([]string{"acme/tool", "starship"})
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	for _, r := range results {
+		if r.Plugin.Type != PluginGitHub {
+			continue
+		}
+		if r.Status != StatusError {
+			t.Fatalf("plugin %q: expected StatusError, got %d", r.Plugin.Raw, r.Status)
+		}
+		if r.Err == nil || !strings.Contains(r.Err.Error(), "create plugins dir") {
+			t.Errorf("plugin %q: err should carry the mkdir failure, got %v", r.Plugin.Raw, r.Err)
+		}
+		if !strings.Contains(r.Err.Error(), "not a directory") {
+			t.Errorf("plugin %q: err should be the mkdir error itself, got %v", r.Plugin.Raw, r.Err)
+		}
+	}
+}
