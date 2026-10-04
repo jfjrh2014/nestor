@@ -55,6 +55,13 @@ func IsUnborn(dir string) bool {
 	return unborn(dir)
 }
 
+// mergeInProgress reports whether dir has an unfinished merge (MERGE_HEAD
+// resolves). A failed pull can leave this state behind together with
+// conflict markers in the worktree files.
+func mergeInProgress(dir string) bool {
+	return exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").Run() == nil
+}
+
 // advertisedSymref parses `git ls-remote --symref <remote> HEAD` output.
 // It returns the advertised default branch name and whether that symref is
 // unborn: real servers follow the symref line with an all-zero object id
@@ -383,6 +390,15 @@ func Push(dir, remote string) error {
 // merge allows unrelated histories: nestor owns both ends of the config
 // repo, so a machine's first pull is unrelated by definition, never a
 // user mistake worth blocking on.
+//
+// A pull that stops on merge conflicts aborts the merge before the error
+// returns: git writes conflict markers into the tracked files it touched,
+// and leaving them in place corrupts the user's config with <<<<<<< lines
+// while MERGE_HEAD still marks the repo as mid-merge. The abort restores
+// the pre-pull state exactly (nestor owns the merge it started), and the
+// error tells the user what conflicted. A merge that was already in
+// progress before the pull started is left untouched — that one is the
+// user's.
 func Pull(dir, remote string) error {
 	if !HasGit() {
 		return ErrGitNotFound
@@ -396,6 +412,9 @@ func Pull(dir, remote string) error {
 			return fmt.Errorf("baseline commit before first pull: %w", err)
 		}
 	}
+	// A merge already in progress before the pull belongs to the user —
+	// never abort it, whatever the pull does.
+	userMerge := mergeInProgress(dir)
 	// The merge may need a commit (first pull, divergent edits); give it the
 	// same identity fallback Commit uses so virgin machines don't die on
 	// "please tell me who you are".
@@ -409,7 +428,26 @@ func Pull(dir, remote string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if userMerge || !mergeInProgress(dir) {
+			return err
+		}
+		if abortErr := abortMerge(dir); abortErr != nil {
+			return fmt.Errorf("pull: %w (merge abort also failed: %v — conflict markers may remain, run 'git merge --abort' manually)", err, abortErr)
+		}
+		return fmt.Errorf("pull: %w — merge conflicts stopped the pull; the merge was aborted and your files are back to their pre-pull state. Resolve the differences by hand or push your version first ('nestor push')", err)
+	}
+	return nil
+}
+
+// abortMerge aborts an in-progress merge, restoring the worktree to its
+// pre-merge state.
+func abortMerge(dir string) error {
+	out, err := exec.Command("git", "-C", dir, "merge", "--abort").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git merge --abort: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // DanglingRemoteHEAD reports whether the remote's HEAD is dangling: it

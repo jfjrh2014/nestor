@@ -1017,3 +1017,147 @@ func TestAlignAdoptsSoleRemoteBranch(t *testing.T) {
 		t.Errorf("remote work branch missing machine's commit (got %q, err %v)", string(out), err)
 	}
 }
+
+func TestPullConflictAbortsMerge(t *testing.T) {
+	remote := initRemoteRepo(t)
+	if remote == "" {
+		return
+	}
+	// Seed the remote: machine A commits its version of shared.yml.
+	seed := t.TempDir()
+	if out, err := exec.Command("git", "clone", remote, seed).CombinedOutput(); err != nil {
+		t.Fatalf("clone failed: %v (%s)", err, out)
+	}
+	commitFile(t, seed, "shared.yml", "from machine A\n", "machine A config")
+	if err := Push(seed, "origin"); err != nil {
+		t.Fatalf("seed Push failed: %v", err)
+	}
+
+	// Machine B: fresh repo, unborn HEAD, its own version of shared.yml —
+	// the documented first-pull-on-a-second-machine shape.
+	other := t.TempDir()
+	if out, err := exec.Command("git", "init", "-b", "main", other).CombinedOutput(); err != nil {
+		t.Fatalf("init failed: %v (%s)", err, out)
+	}
+	if err := SetRemote(other, "origin", remote); err != nil {
+		t.Fatalf("SetRemote failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "shared.yml"), []byte("from machine B\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Pull(other, "origin")
+	if err == nil {
+		t.Fatal("conflicting first pull should fail")
+	}
+	if !strings.Contains(err.Error(), "merge was aborted") {
+		t.Errorf("error should say the merge was aborted, got: %v", err)
+	}
+
+	// The abort must have removed the conflict markers from the worktree:
+	// the file is exactly what machine B wrote, byte for byte.
+	got, readErr := os.ReadFile(filepath.Join(other, "shared.yml"))
+	if readErr != nil {
+		t.Fatalf("shared.yml missing after abort: %v", readErr)
+	}
+	if string(got) != "from machine B\n" {
+		t.Errorf("conflict markers left in worktree, got: %q", got)
+	}
+	// ...and no merge left in progress.
+	if mergeInProgress(other) {
+		t.Error("merge still in progress after pull failure")
+	}
+	// The baseline commit nestor made before pulling still exists, so the
+	// user can resolve and merge by hand.
+	if unborn(other) {
+		t.Error("baseline commit lost — HEAD is unborn again")
+	}
+}
+
+func TestPullCleanFastForward(t *testing.T) {
+	remote := initRemoteRepo(t)
+	if remote == "" {
+		return
+	}
+	seed := t.TempDir()
+	if out, err := exec.Command("git", "clone", remote, seed).CombinedOutput(); err != nil {
+		t.Fatalf("clone failed: %v (%s)", err, out)
+	}
+	commitFile(t, seed, "a.yml", "a\n", "first")
+	if err := Push(seed, "origin"); err != nil {
+		t.Fatalf("seed Push failed: %v", err)
+	}
+
+	// Machine B: fresh empty repo (no local files) — pull fast-forwards.
+	other := t.TempDir()
+	if out, err := exec.Command("git", "init", "-b", "main", other).CombinedOutput(); err != nil {
+		t.Fatalf("init failed: %v (%s)", err, out)
+	}
+	if err := SetRemote(other, "origin", remote); err != nil {
+		t.Fatalf("SetRemote failed: %v", err)
+	}
+	if err := Pull(other, "origin"); err != nil {
+		t.Fatalf("Pull failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(other, "a.yml")); err != nil {
+		t.Fatalf("a.yml missing after Pull: %v", err)
+	}
+}
+
+func TestPullLeavesUserMergeInProgress(t *testing.T) {
+	remote := initRemoteRepo(t)
+	if remote == "" {
+		return
+	}
+	seed := t.TempDir()
+	if out, err := exec.Command("git", "clone", remote, seed).CombinedOutput(); err != nil {
+		t.Fatalf("clone failed: %v (%s)", err, out)
+	}
+	commitFile(t, seed, "a.yml", "a\n", "first")
+	if err := Push(seed, "origin"); err != nil {
+		t.Fatalf("seed Push failed: %v", err)
+	}
+
+	other := t.TempDir()
+	if out, err := exec.Command("git", "clone", remote, other).CombinedOutput(); err != nil {
+		t.Fatalf("clone failed: %v (%s)", err, out)
+	}
+
+	// Start a merge the user owns, and leave it unfinished. Diverge first:
+	// a --no-commit merge of an up-to-date branch is a no-op and creates no
+	// MERGE_HEAD, so the remote must advance AND the clone must hold a local
+	// commit before the test merge is real. The branch name is whatever the
+	// clone checked out (initRemoteRepo does not pin one).
+	branch, brErr := Branch(other)
+	if brErr != nil || branch == "" {
+		t.Fatalf("clone branch unknown: %v (%q)", brErr, branch)
+	}
+	commitFile(t, seed, "b.yml", "b\n", "advance remote")
+	if err := Push(seed, "origin"); err != nil {
+		t.Fatalf("advance Push failed: %v", err)
+	}
+	commitFile(t, other, "c.yml", "c\n", "diverge locally")
+	if out, err := exec.Command("git", "-C", other, "fetch", "origin").CombinedOutput(); err != nil {
+		t.Fatalf("fetch failed: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", other, "merge", "--no-commit", "--no-ff", "origin/"+branch).CombinedOutput(); err != nil {
+		t.Fatalf("setup merge failed: %v (%s)", err, out)
+	}
+	if !mergeInProgress(other) {
+		t.Fatal("fixture broken: no merge in progress after setup")
+	}
+
+	// A pull that fails for an unrelated reason must NOT abort the user's
+	// merge. Use an unreachable second remote so the pull errors before any
+	// merge is attempted.
+	otherRemote := filepath.Join(t.TempDir(), "gone.git")
+	if err := SetRemote(other, "broken", otherRemote); err != nil {
+		t.Fatalf("SetRemote failed: %v", err)
+	}
+	if err := Pull(other, "broken"); err == nil {
+		t.Fatal("pull from unreachable remote should fail")
+	}
+	if !mergeInProgress(other) {
+		t.Error("user's in-progress merge was aborted by a failing pull")
+	}
+}
