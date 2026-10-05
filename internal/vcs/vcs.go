@@ -50,9 +50,13 @@ func unborn(dir string) bool {
 }
 
 // IsUnborn reports whether HEAD names a branch that has no commits yet —
-// the state of a freshly-initialized repo before its first commit.
+// the state of a freshly-initialized repo before its first commit. A
+// directory that is not a git repository reports false: rev-parse fails
+// there too (probed: exit 128, "fatal: not a git repository"), and taking
+// that failure as "unborn" made IsUnborn report true for every plain
+// directory.
 func IsUnborn(dir string) bool {
-	return unborn(dir)
+	return IsRepo(dir) && unborn(dir)
 }
 
 // mergeInProgress reports whether dir has an unfinished merge (MERGE_HEAD

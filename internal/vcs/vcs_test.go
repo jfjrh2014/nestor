@@ -1161,3 +1161,52 @@ func TestPullLeavesUserMergeInProgress(t *testing.T) {
 		t.Error("user's in-progress merge was aborted by a failing pull")
 	}
 }
+
+// TestIsUnbornStates pins IsUnborn on all three states: an unborn repo
+// (fresh init, no commits), a born repo (after the first commit), and a
+// directory that is not a git repository at all. Before the fix, IsUnborn
+// delegated to a bare rev-parse failure, so every non-repo reported true.
+func TestIsUnbornStates(t *testing.T) {
+	if !gitAvailable(t) {
+		return
+	}
+	setBranchNames(t, "mastervalue")
+
+	dir := t.TempDir()
+	if err := Init(dir); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	if !IsUnborn(dir) {
+		t.Error("IsUnborn(fresh init) = false, want true")
+	}
+
+	commitFile(t, dir, "nestor.yml", "version: 1\n", "initial")
+	if IsUnborn(dir) {
+		t.Error("IsUnborn(committed repo) = true, want false")
+	}
+
+	if IsUnborn(filepath.Join(dir, "missing")) {
+		t.Error("IsUnborn(non-repo directory) = true, want false")
+	}
+}
+
+// TestIsUnbornDetached pins the detached-HEAD state: HEAD resolves to a
+// commit but names no branch, so the repo is not unborn.
+func TestIsUnbornDetached(t *testing.T) {
+	if !gitAvailable(t) {
+		return
+	}
+	setBranchNames(t, "mastervalue")
+
+	dir := t.TempDir()
+	if err := Init(dir); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	commitFile(t, dir, "nestor.yml", "version: 1\n", "initial")
+	if out, err := exec.Command("git", "-C", dir, "checkout", "--detach", "HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("detach failed: %v (%s)", err, out)
+	}
+	if IsUnborn(dir) {
+		t.Error("IsUnborn(detached HEAD) = true, want false")
+	}
+}
