@@ -208,3 +208,4 @@ profiles:
 6. Beautiful output — lipgloss, clean progress
 
 ---
+2026-10-05: vcs.IsUnborn reported every non-repo directory as unborn (rev-parse fails there too). Gated on IsRepo, +2 tests pinning unborn/born/detached/non-repo. 470 tests, gate green. Next: v0.1 (workflow scope still pending).
