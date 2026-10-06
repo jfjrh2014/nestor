@@ -12,14 +12,16 @@ import (
 )
 
 // writeTestConfig writes a minimal valid nestor.yml to path and returns it.
+// The dotfiles source dir is a subdirectory of the config's own dir, so tests
+// never write into machine-wide paths.
 func writeTestConfig(t *testing.T, path string) {
 	t.Helper()
-	content := `version: 1
+	content := fmt.Sprintf(`version: 1
 packages:
   common:
     - git
 dotfiles:
-  source: /tmp/dotfiles
+  source: %s
   strategy: copy
   templates: []
 secrets:
@@ -27,7 +29,7 @@ secrets:
   mappings: []
 shells:
   default: bash
-`
+`, filepath.Join(filepath.Dir(path), "dotfiles"))
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +97,12 @@ func TestAddDotfile(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "nestor.yml")
 	writeTestConfig(t, cfgPath)
+	// addDotfile resolves ~ against the real home: pin HOME to the temp dir
+	// and create the source file there, so the test is deterministic.
+	t.Setenv("HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, ".bashrc"), []byte("export FOO=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cfgFile = cfgPath
 	defer func() { cfgFile = "" }()
 
@@ -113,12 +121,26 @@ func TestAddDotfile(t *testing.T) {
 	if cfg.Dotfiles.Templates[0].Dest != "~/.bashrc" {
 		t.Errorf("expected dest ~/.bashrc, got %q", cfg.Dotfiles.Templates[0].Dest)
 	}
+
+	// The recorded src must exist: add materializes the template into the
+	// source dir, otherwise every 'nestor up' reports src-missing.
+	tmpl, err := os.ReadFile(filepath.Join(dir, "dotfiles", ".bashrc.tmpl"))
+	if err != nil {
+		t.Fatalf("template not materialized in source dir: %v", err)
+	}
+	if string(tmpl) != "export FOO=1\n" {
+		t.Errorf("template content = %q, want the source file's content", tmpl)
+	}
 }
 
 func TestAddDotfileDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "nestor.yml")
 	writeTestConfig(t, cfgPath)
+	t.Setenv("HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, ".bashrc"), []byte("export FOO=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cfgFile = cfgPath
 	defer func() { cfgFile = "" }()
 
@@ -141,6 +163,71 @@ func TestAddDotfileDuplicate(t *testing.T) {
 	}
 	if len(cfg.Dotfiles.Templates) != 1 {
 		t.Errorf("expected 1 template after dup add, got %d", len(cfg.Dotfiles.Templates))
+	}
+}
+
+// TestAddDotfileRefusesMissingSource pins the session #98 contract: add must
+// refuse a dotfile whose source file does not exist (a typo must not be
+// fossilized in nestor.yml as a template that reports src-missing forever),
+// and the refused add must leave the config byte-for-byte unchanged.
+func TestAddDotfileRefusesMissingSource(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	before, _ := os.ReadFile(cfgPath)
+	var out bytes.Buffer
+	err := addDotfile(filepath.Join(dir, ".does-not-exist"), "", &out)
+	if err == nil {
+		t.Fatal("expected error for missing source file, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should say the source was not found, got: %v", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config file was modified despite missing-source refusal")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "dotfiles", ".does-not-exist.tmpl")); statErr == nil {
+		t.Error("template materialized despite missing-source refusal")
+	}
+}
+
+// TestAddDotfileKeepsEditedTemplate pins the working-copy contract shared
+// with sync capture: an existing template in the source dir is the user's
+// edited copy and must never be re-copied over.
+func TestAddDotfileKeepsEditedTemplate(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	t.Setenv("HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, ".bashrc"), []byte("live content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "dotfiles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dotfiles", ".bashrc.tmpl"), []byte("user edits {{ .secret }}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	if err := addDotfile("~/.bashrc", "", &out); err != nil {
+		t.Fatalf("addDotfile: %v", err)
+	}
+	if !strings.Contains(out.String(), "kept existing template") {
+		t.Errorf("expected keep-existing message, got: %s", out.String())
+	}
+	tmpl, err := os.ReadFile(filepath.Join(dir, "dotfiles", ".bashrc.tmpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(tmpl) != "user edits {{ .secret }}\n" {
+		t.Errorf("working copy was clobbered: %q", tmpl)
 	}
 }
 
@@ -513,6 +600,10 @@ func TestAddDotfileProfileWarnsOnBaseOverride(t *testing.T) {
 	}
 	existing.Dotfiles.Templates = append(existing.Dotfiles.Templates, config.Template{Src: ".bashrc.tmpl", Dest: "~/.bashrc"})
 	if err := writeConfig(cfgPath, existing); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, ".bashrc"), []byte("export FOO=1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfgFile = cfgPath

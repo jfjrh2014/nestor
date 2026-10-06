@@ -138,9 +138,35 @@ func addDotfile(name, profileName string, out io.Writer) error {
 		absPath, _ = filepath.Abs(name)
 	}
 
+	// The source file must exist: add records src: <base>.tmpl in the config,
+	// and a template whose source is missing reports src-missing on every
+	// future 'nestor up' — a typo should be refused here, not fossilized in
+	// nestor.yml.
+	if _, err := os.Stat(absPath); err != nil {
+		return fmt.Errorf("add dotfile: source %s not found: %v", absPath, err)
+	}
+
 	// Figure out filename for src
 	base := filepath.Base(absPath)
 	srcName := base + ".tmpl"
+
+	// Materialize the template into the source dir, mirroring 'nestor sync'
+	// capture: without it the recorded src points at a file that never
+	// exists and every 'nestor up' reports src-missing. An existing template
+	// is the user's working copy — never re-copied over.
+	sourceDir := cfg.Dotfiles.Source
+	if sourceDir == "" {
+		sourceDir = config.DefaultDotfilesSource()
+	}
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		return fmt.Errorf("add dotfile: create source dir: %w", err)
+	}
+	tmplPath := filepath.Join(sourceDir, srcName)
+	if _, err := os.Stat(tmplPath); err == nil {
+		fmt.Fprintf(out, "nestor: kept existing template %s (not re-copied)\n", tmplPath)
+	} else if err := fsutil.CopyFileSync(absPath, tmplPath); err != nil {
+		return fmt.Errorf("add dotfile: copy template: %w", err)
+	}
 
 	// Check for duplicate destination — validate() rejects dup dests, so
 	// writing one here would brick every subsequent config load.
