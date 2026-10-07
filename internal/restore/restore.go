@@ -12,6 +12,7 @@ import (
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/fsutil"
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -61,7 +62,18 @@ func Validate(data []byte) (*config.Config, error) {
 
 // Write saves the fetched config to the given destination path.
 // It refuses to overwrite an existing file unless overwrite is true.
+// A leading "~"/"~/..." in dest is expanded against the user's home —
+// os.WriteFile and MkdirAll have no tilde knowledge, so without this the
+// documented `nestor restore --from <url> -o ~/.config/nestor/nestor.yml`
+// silently creates a literal directory named "~" in the current directory.
+// The "~user/..." form is NOT expanded and is rejected instead: see
+// pathutil.IsOtherUserTilde.
 func Write(data []byte, dest string, overwrite bool) error {
+	if pathutil.IsOtherUserTilde(dest) {
+		return fmt.Errorf("dest %q uses the ~user/... form, which nestor does not expand (it would write into your own home)", dest)
+	}
+	dest = pathutil.ExpandHome(dest, userHome())
+
 	if !overwrite {
 		if _, err := os.Stat(dest); err == nil {
 			return fmt.Errorf("%s already exists (use --force to overwrite)", dest)
@@ -83,6 +95,17 @@ func Write(data []byte, dest string, overwrite bool) error {
 	}
 
 	return nil
+}
+
+// userHome returns the current user's home directory, or "" when the lookup
+// fails. ExpandHome leaves paths unchanged on an empty home rather than
+// re-rooting them at a relative path.
+func userHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
 }
 
 // Preview returns a human-readable summary of what the config contains,

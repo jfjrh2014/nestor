@@ -731,3 +731,42 @@ func TestWriteConfigCreatesMissingConfigDir(t *testing.T) {
 		t.Fatalf("reload from freshly created dir: %v", err)
 	}
 }
+
+// TestAddDotfileRefusesOtherUserTilde pins that "nestor add dotfile
+// ~root/.bashrc" does not silently re-root the path at the CURRENT user's
+// home (the pre-fix code did exactly that: filepath.Join(home, name[1:])
+// turned "~root/.bashrc" into "$HOME/root/.bashrc"). The path must stay
+// literal, so the existence check refuses it loudly and nothing is written.
+func TestAddDotfileRefusesOtherUserTilde(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	t.Setenv("HOME", dir)
+	// The trap file that made the old bug invisible: a decoy at
+	// $HOME/root/.bashrc lets the wrong re-rooted Stat succeed.
+	if err := os.MkdirAll(filepath.Join(dir, "root"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "root", ".bashrc"), []byte("decoy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	before, _ := os.ReadFile(cfgPath)
+	var out bytes.Buffer
+	err := addDotfile("~root/.bashrc", "", &out)
+	if err == nil {
+		t.Fatal("expected refusal for ~user/... path, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should say the source was not found, got: %v", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config file was modified despite ~user/... refusal")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "dotfiles", ".bashrc.tmpl")); statErr == nil {
+		t.Error("template materialized from the wrong (re-rooted) path")
+	}
+}

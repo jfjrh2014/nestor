@@ -129,10 +129,14 @@ func addDotfile(name, profileName string, out io.Writer) error {
 		return fmt.Errorf("add dotfile: %w", err)
 	}
 
-	// Resolve the path
+	// Resolve the path. The file must exist, so the resolution has to agree
+	// with what Stat can actually see: only the current user's home is
+	// expandable — "~root/.bashrc" stays literal (and therefore missing,
+	// which the check below turns into a loud refusal) rather than being
+	// silently re-rooted at the wrong home.
 	absPath := name
 	home, _ := os.UserHomeDir()
-	if name[0] == '~' {
+	if name == "~" || strings.HasPrefix(name, "~/") {
 		absPath = filepath.Join(home, name[1:])
 	} else if !filepath.IsAbs(name) {
 		absPath, _ = filepath.Abs(name)

@@ -322,3 +322,62 @@ func TestWriteDurableOverwrite(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteTildeDest pins the documented example `nestor restore --from <url>
+// -o ~/.config/nestor/nestor.yml`: the tilde must resolve to the real home.
+// Without expansion, os.WriteFile silently creates a literal directory named
+// "~" in the current directory (probed: MkdirAll+WriteFile return nil and the
+// cwd gains a "~" entry).
+func TestWriteTildeDest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(cwd) })
+
+	if err := Write([]byte("version: 1\n"), "~/.config/nestor/nestor.yml", false); err != nil {
+		t.Fatalf("Write with tilde dest: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".config", "nestor", "nestor.yml"))
+	if err != nil {
+		t.Fatalf("file not written to the real home: %v", err)
+	}
+	if string(data) != "version: 1\n" {
+		t.Errorf("unexpected content: %q", data)
+	}
+
+	// The damage the bug caused: a literal "~" directory in the cwd.
+	if _, err := os.Stat("~"); err == nil {
+		t.Error(`a literal "~" directory was created in the current directory`)
+	}
+}
+
+// TestWriteRefusesOtherUserTilde pins the "~user/..." rejection: nestor does
+// not expand foreign tildes, and silently re-rooting "~root/.bashrc" at the
+// current user's home is exactly the bug class pathutil guards against.
+func TestWriteRefusesOtherUserTilde(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	err := Write([]byte("version: 1\n"), "~root/.config/nestor/nestor.yml", false)
+	if err == nil {
+		t.Fatal("expected error for ~user/... dest, got nil")
+	}
+	if !strings.Contains(err.Error(), "~user/... form") {
+		t.Errorf("error should mention the ~user/... form, got: %v", err)
+	}
+	// Nothing may land anywhere: neither the real home tree nor a literal
+	// "~root" directory in the cwd.
+	if _, statErr := os.Stat(filepath.Join(dir, ".config")); statErr == nil {
+		t.Error("config tree created in the real home despite refusal")
+	}
+	if _, statErr := os.Stat("~root"); statErr == nil {
+		t.Error(`a literal "~root" directory was created despite refusal`)
+	}
+}
