@@ -9,6 +9,7 @@ import (
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/dotfiles"
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +53,7 @@ func runEdit(name string, w io.Writer) error {
 	// Create empty file if it doesn't exist so the editor has something to open.
 	isNew := false
 	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-		if err := os.WriteFile(srcPath, []byte{}, 0o644); err != nil {
+		if err := fsutil.WriteFileSync(srcPath, []byte{}, 0o644); err != nil {
 			return fmt.Errorf("create template: %w", err)
 		}
 		isNew = true

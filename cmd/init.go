@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"github.com/spf13/cobra"
 )
 
@@ -58,7 +59,7 @@ func runInit(w io.Writer) error {
 		return fmt.Errorf("%s already exists, not overwriting", target)
 	}
 
-	if err := os.WriteFile(target, []byte(starterConfig), 0644); err != nil {
+	if err := fsutil.WriteFileSync(target, []byte(starterConfig), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", target, err)
 	}
 

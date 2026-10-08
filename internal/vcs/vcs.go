@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 )
 
 // ErrGitNotFound is returned when the git binary is not on PATH.
@@ -209,7 +211,7 @@ secrets.env
 	if _, err := os.Stat(path); err == nil {
 		return nil // already exists, don't overwrite
 	}
-	return os.WriteFile(path, []byte(gitignore), 0o644)
+	return fsutil.WriteFileSync(path, []byte(gitignore), 0o644)
 }
 
 // RemoteSet reports whether a remote with the given name exists.

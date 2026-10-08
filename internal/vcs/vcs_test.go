@@ -1210,3 +1210,54 @@ func TestIsUnbornDetached(t *testing.T) {
 		t.Error("IsUnborn(detached HEAD) = true, want false")
 	}
 }
+
+// TestWriteGitignoreIsDurable pins the write path: WriteGitignore must create
+// its .gitignore through the durable writer (temp+fsync+rename), leaving
+// either the full file or nothing — never a truncated half-file if the
+// process dies mid-write. A plain os.WriteFile here also skips the MkdirAll
+// that WriteFileSync performs for nested repo dirs.
+func TestWriteGitignoreIsDurable(t *testing.T) {
+	if !gitAvailable(t) {
+		return
+	}
+	dir := t.TempDir()
+
+	if err := WriteGitignore(dir); err != nil {
+		t.Fatalf("WriteGitignore failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read back .gitignore: %v", err)
+	}
+	for _, want := range []string{"snapshots/", "secrets.env", "*.key"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf(".gitignore missing %q, got:\n%s", want, data)
+		}
+	}
+
+	// Nested dir variant: the writer creates the parent itself.
+	nested := filepath.Join(dir, "a", "b")
+	if err := WriteGitignore(nested); err != nil {
+		t.Fatalf("WriteGitignore nested failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(nested, ".gitignore")); err != nil {
+		t.Errorf("nested .gitignore not created: %v", err)
+	}
+
+	// Existing file is preserved byte-for-byte (skip, don't overwrite).
+	path := filepath.Join(dir, ".gitignore")
+	keep := []byte("# my rules\n")
+	if err := os.WriteFile(path, keep, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteGitignore(dir); err != nil {
+		t.Fatalf("second WriteGitignore failed: %v", err)
+	}
+	again, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != string(keep) {
+		t.Errorf("existing .gitignore clobbered: got %q, want %q", again, keep)
+	}
+}

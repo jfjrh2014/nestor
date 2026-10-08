@@ -217,3 +217,55 @@ func TestOpenEditorDefault(t *testing.T) {
 		t.Errorf("default editor = %q, want %q", editor, "vi")
 	}
 }
+
+// TestEditCreatesTemplateParsesAfterWrite pins the durable-write path of the
+// new-template creation in runEdit: the empty starter template must be
+// written through fsutil.WriteFileSync (temp+fsync+rename). Under plain
+// os.WriteFile a crash mid-write left a truncated file the editor opened and
+// the user saved over — the starter must be either fully present or absent.
+func TestEditCreatesTemplateParsesAfterWrite(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	srcDir := filepath.Join(dir, "dotfiles")
+
+	cfg := "version: 1\ndotfiles:\n  source: " + srcDir + "\n  strategy: copy\n"
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR", "true")
+
+	origCfgFile := cfgFile
+	cfgFile = cfgPath
+	defer func() { cfgFile = origCfgFile }()
+
+	var buf bytes.Buffer
+	if err := runEdit("test.tmpl", &buf); err != nil {
+		t.Fatalf("runEdit: %v", err)
+	}
+
+	created := filepath.Join(srcDir, "test.tmpl")
+	data, err := os.ReadFile(created)
+	if err != nil {
+		t.Fatalf("template not created: %v", err)
+	}
+	// The starter is an empty file — anything else means the write raced.
+	if len(data) != 0 {
+		t.Errorf("new template should be empty, got %d bytes", len(data))
+	}
+
+	// Existing template is never rewritten (only created when absent): edit a
+	// template, run again, assert the edit survives.
+	if err := os.WriteFile(created, []byte("# hand edits\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEdit("test.tmpl", &buf); err != nil {
+		t.Fatalf("second runEdit: %v", err)
+	}
+	again, err := os.ReadFile(created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != "# hand edits\n" {
+		t.Errorf("second runEdit clobbered working copy: got %q", again)
+	}
+}

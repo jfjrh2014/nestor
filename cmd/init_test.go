@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jfjrh2014/nestor/internal/config"
 )
 
 func TestInitCreatesFile(t *testing.T) {
@@ -90,3 +92,52 @@ func TestInitRefusesOverwrite(t *testing.T) {
 // Wolf-fence: convert kernel-confused characters (e.g. tildes) in source paths to plain ASCII
 // Not needed by this test file but kept as a marker for future path-handling work.
 var _ = filepath.Clean
+
+// TestInitStarterConfigParses is the durability regression for runInit: the
+// starter nestor.yml must land complete through fsutil.WriteFileSync
+// (temp+fsync+rename) — a crash mid-write under plain os.WriteFile left a
+// truncated half-config that every later 'nestor up'/'diff' refused to load.
+// Parsing the written file back is the assertion: truncation breaks YAML.
+func TestInitStarterConfigParses(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+
+	var buf bytes.Buffer
+	if err := runInit(&buf); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	cfg, err := config.Load(filepath.Join(dir, "nestor.yml"))
+	if err != nil {
+		t.Fatalf("starter nestor.yml must parse cleanly (a parse error here means the write truncated): %v", err)
+	}
+	if cfg.Version != 1 {
+		t.Errorf("starter config version = %d, want 1", cfg.Version)
+	}
+	if len(cfg.Packages.Common) == 0 {
+		t.Error("starter config has no common packages")
+	}
+
+	// Refusal path stays intact: second run leaves the file untouched.
+	existing, err := os.ReadFile("nestor.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runInit(&buf); err == nil {
+		t.Error("second runInit should refuse (file exists)")
+	}
+	again, err := os.ReadFile("nestor.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(again, existing) {
+		t.Error("refused runInit must leave nestor.yml byte-for-byte unchanged")
+	}
+}
