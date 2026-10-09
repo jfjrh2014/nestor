@@ -1,6 +1,7 @@
 package restore
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -379,5 +380,44 @@ func TestWriteRefusesOtherUserTilde(t *testing.T) {
 	}
 	if _, statErr := os.Stat("~root"); statErr == nil {
 		t.Error(`a literal "~root" directory was created despite refusal`)
+	}
+}
+
+// TestFetchRefusesOversizedBody pins the LimitReader truncation fix: a body
+// larger than maxFetchBytes fills the limit reader completely, so ReadAll
+// returns err == nil with the tail silently gone. Fetch must refuse the
+// filled buffer instead of handing a truncated config to Validate and Write.
+func TestFetchRefusesOversizedBody(t *testing.T) {
+	marker := []byte("TRAILING-MARKER")
+	oversized := append(bytes.Repeat([]byte("a"), maxFetchBytes), marker...)
+	exactly := append(bytes.Repeat([]byte("b"), maxFetchBytes-len(marker)), marker...)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(oversized)
+	}))
+	defer srv.Close()
+
+	_, err := Fetch(srv.URL + "/nestor.yml")
+	if err == nil {
+		t.Fatal("expected error for oversized body, got nil")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Errorf("error should mention the size limit, got: %v", err)
+	}
+
+	// A body of exactly maxFetchBytes must still be accepted, whole —
+	// the guard keys on the limit being exceeded, not on big bodies in
+	// general.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(exactly)
+	}))
+	defer srv2.Close()
+
+	got, err := Fetch(srv2.URL + "/nestor.yml")
+	if err != nil {
+		t.Fatalf("exactly-at-limit body should fetch cleanly: %v", err)
+	}
+	if !bytes.Equal(got, exactly) {
+		t.Errorf("exactly-at-limit body must be returned whole (len=%d, want=%d)", len(got), len(exactly))
 	}
 }

@@ -16,6 +16,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// maxFetchBytes bounds how much of a fetched config nestor will read. The
+// read itself is capped one byte above this via io.LimitReader, so a body
+// larger than the limit fills the buffer and is detected by length — a bare
+// LimitReader(maxFetchBytes) returns err == nil with the tail silently
+// truncated, indistinguishable from an exactly-at-limit body. Fetch refuses
+// rather than handing a headless config to Validate and Write.
+const maxFetchBytes = 10 << 20 // 10 MB
+
 // Fetch downloads a nestor.yml from the given URL and returns the raw bytes.
 func Fetch(rawURL string) ([]byte, error) {
 	if err := validateURL(rawURL); err != nil {
@@ -33,13 +41,17 @@ func Fetch(rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("fetching %s: HTTP %d %s", rawURL, resp.StatusCode, resp.Status)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB max
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
 	if len(body) == 0 {
 		return nil, fmt.Errorf("fetched config is empty")
+	}
+
+	if len(body) > maxFetchBytes {
+		return nil, fmt.Errorf("fetched config is too large: %d bytes (max %d)", len(body), maxFetchBytes)
 	}
 
 	return body, nil
