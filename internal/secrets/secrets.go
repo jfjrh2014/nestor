@@ -181,7 +181,10 @@ func (s Status) String() string {
 }
 
 func injectOne(key, val, dest, pattern string) InjectResult {
-	dest = expandHome(dest)
+	dest, destErr := pathutil.ResolveHome(dest, currentHome())
+	if destErr != nil {
+		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: destErr}
+	}
 
 	// Never write through a pre-existing symlink at dest: every write path in
 	// this function follows links, so a link left
@@ -289,6 +292,13 @@ func replaceAnchoredLine(content, anchor, newLine string) (string, bool) {
 }
 
 func expandHome(p string) string {
+	return pathutil.ExpandHome(p, currentHome())
+}
+
+// currentHome returns the current user's home, or "" when the lookup fails.
+// Write boundaries resolve dests through pathutil.ResolveHome so an
+// unavailable home refuses tilde dests instead of writing them unexpanded.
+func currentHome() string {
 	home, _ := os.UserHomeDir()
-	return pathutil.ExpandHome(p, home)
+	return home
 }

@@ -78,11 +78,11 @@ func (d Deployer) DeployAll(temps []Template) []Result {
 
 // Deploy renders the template at t.Src and writes it to t.Dest.
 func (d Deployer) Deploy(t Template) Result {
-	if pathutil.IsOtherUserTilde(t.Dest) {
-		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("dest %q uses the ~user/... form, which nestor does not expand (it would deploy into your own home)", t.Dest)}
-	}
 	src := absPath(d.Source, t.Src)
-	dest := expandHome(t.Dest)
+	dest, destErr := pathutil.ResolveHome(t.Dest, currentHome())
+	if destErr != nil {
+		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("dest: %w", destErr)}
+	}
 
 	if _, err := os.Stat(src); err != nil {
 		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("src: %w", err)}
@@ -253,11 +253,11 @@ func fallbackCopy(src, dest string) error {
 // Check compares the rendered template source against the deployed dest
 // without writing anything. Used by 'nestor diff' for drift detection.
 func (d Deployer) Check(src, dest string) CheckStatus {
-	if pathutil.IsOtherUserTilde(dest) {
+	destPath, destErr := pathutil.ResolveHome(dest, currentHome())
+	if destErr != nil {
 		return CheckUnknown
 	}
 	srcPath := absPath(d.Source, src)
-	destPath := expandHome(dest)
 
 	if _, err := os.Stat(srcPath); err != nil {
 		return CheckSrcMissing
@@ -387,7 +387,10 @@ func absPath(source, p string) string {
 	return filepath.Join(source, p)
 }
 
-func expandHome(p string) string {
+// currentHome returns the current user's home, or "" when the lookup fails.
+// Write boundaries resolve dests through pathutil.ResolveHome so an
+// unavailable home refuses tilde dests instead of writing them unexpanded.
+func currentHome() string {
 	home, _ := os.UserHomeDir()
-	return pathutil.ExpandHome(p, home)
+	return home
 }

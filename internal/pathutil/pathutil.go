@@ -2,6 +2,7 @@
 package pathutil
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -39,4 +40,23 @@ func IsOtherUserTilde(path string) bool {
 		return false
 	}
 	return true
+}
+
+// ResolveHome expands a leading "~" or "~/..." against home and rejects the
+// "~user/..." form. When home is empty (the lookup failed) any tilde form is
+// refused instead of passing through: a dest like "~/.bashrc" written
+// unexpanded lands under a literal "~" directory relative to the working
+// directory — silent corruption (probed: Deploy reported "deployed" while
+// creating ./~/.bashrc). Plain and absolute paths pass through unchanged.
+func ResolveHome(path, home string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(path, "~") && home == "" {
+		return "", fmt.Errorf("cannot expand %q: home directory is unavailable (HOME not set and no user record)", path)
+	}
+	if IsOtherUserTilde(path) {
+		return "", fmt.Errorf("%q uses the ~user/... form, which nestor does not expand (it would write into your own home)", path)
+	}
+	return ExpandHome(path, home), nil
 }

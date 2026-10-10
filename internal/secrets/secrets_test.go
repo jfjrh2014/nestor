@@ -809,3 +809,42 @@ func TestInjectOneAppendKeepsPriorContent(t *testing.T) {
 		t.Fatalf("prior content lost, file = %q", data)
 	}
 }
+
+// TestInjectOneRefusesTildeDestWhenHomeUnavailable: with the home lookup
+// failing, a "~/.foo" dest must be refused — the old expandHome passed it
+// through unexpanded and the injection wrote under a literal "~" directory
+// relative to the working directory. Plain dests are unaffected.
+func TestInjectOneRefusesTildeDestWhenHomeUnavailable(t *testing.T) {
+	t.Setenv("HOME", "")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(cwd) })
+
+	r := injectOne("github_token", "ghp_new", "~/.hosts.yml", "oauth_token: {{.Key}}")
+	if r.Status != StatusError {
+		t.Fatalf("want StatusError for tilde dest with unavailable home, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "home directory is unavailable") {
+		t.Fatalf("expected home-unavailable refusal, got %v", r.Err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "~")); err == nil {
+		t.Errorf("unexpanded dest was written: %s exists", filepath.Join(work, "~"))
+		os.RemoveAll(filepath.Join(work, "~"))
+	}
+
+	// The guard keys on the defect: a plain dest still injects.
+	plain := filepath.Join(work, "hosts.yml")
+	r = injectOne("github_token", "ghp_new", plain, "oauth_token: {{.Key}}")
+	if r.Status != StatusInjected {
+		t.Fatalf("plain dest should inject unaffected, got %s (%v)", r.Status, r.Err)
+	}
+	if _, err := os.Stat(plain); err != nil {
+		t.Errorf("plain dest missing after inject: %v", err)
+	}
+}

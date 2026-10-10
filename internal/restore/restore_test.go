@@ -421,3 +421,42 @@ func TestFetchRefusesOversizedBody(t *testing.T) {
 		t.Errorf("exactly-at-limit body must be returned whole (len=%d, want=%d)", len(got), len(exactly))
 	}
 }
+
+// TestWriteRefusesTildeDestWhenHomeUnavailable: with the home lookup
+// failing, a "~/.config/..." dest must be refused — the old ExpandHome
+// passed it through unexpanded and Write created a literal "~" directory in
+// the cwd (the #99 corruption class, via a different trigger). Plain paths
+// are unaffected.
+func TestWriteRefusesTildeDestWhenHomeUnavailable(t *testing.T) {
+	t.Setenv("HOME", "")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(cwd) })
+
+	err = Write([]byte("version: 1\n"), "~/.config/nestor/nestor.yml", false)
+	if err == nil {
+		t.Fatal("Write(tilde dest, unavailable home) = nil error, want refusal")
+	}
+	if !strings.Contains(err.Error(), "home directory is unavailable") {
+		t.Errorf("error text = %q, want home-unavailable reason", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "~")); err == nil {
+		t.Errorf("unexpanded dest was written: %s exists", filepath.Join(work, "~"))
+		os.RemoveAll(filepath.Join(work, "~"))
+	}
+
+	// Plain dest still lands whole.
+	plain := filepath.Join(work, "nestor.yml")
+	if err := Write([]byte("version: 1\n"), plain, false); err != nil {
+		t.Fatalf("Write plain dest: %v", err)
+	}
+	if _, err := os.Stat(plain); err != nil {
+		t.Errorf("plain dest missing after write: %v", err)
+	}
+}

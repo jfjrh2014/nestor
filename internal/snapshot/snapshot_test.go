@@ -1077,3 +1077,46 @@ func TestCopyFileFailedRestoreKeepsOriginal(t *testing.T) {
 		t.Errorf("temp litter left behind: %v", litter)
 	}
 }
+
+// TestCreateInRefusesTildeDestWhenHomeUnavailable: with the home lookup
+// failing, a "~/.bashrc" backup path must be refused — the old expandHome
+// passed it through unexpanded and the backup ran against a literal "~"
+// path relative to the working directory. Plain paths are unaffected.
+func TestCreateInRefusesTildeDestWhenHomeUnavailable(t *testing.T) {
+	swapHomeErr(t)
+	base := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(cwd) })
+
+	_, err = createIn(base, []string{"~/.bashrc"})
+	if err == nil {
+		t.Fatal("createIn(tilde path, unavailable home) = nil error, want refusal")
+	}
+	if !strings.Contains(err.Error(), "home directory is unavailable") {
+		t.Errorf("error text = %q, want home-unavailable reason", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "~")); err == nil {
+		t.Errorf("unexpanded path was probed/written: %s exists", filepath.Join(work, "~"))
+		os.RemoveAll(filepath.Join(work, "~"))
+	}
+
+	// Plain paths still back up: existing file captured, missing file skipped.
+	existing := filepath.Join(work, "plain.yml")
+	if err := os.WriteFile(existing, []byte("v: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := createIn(base, []string{existing})
+	if err != nil {
+		t.Fatalf("createIn plain paths: %v", err)
+	}
+	if len(snap.Files) != 1 {
+		t.Fatalf("plain backup count = %d, want 1", len(snap.Files))
+	}
+}

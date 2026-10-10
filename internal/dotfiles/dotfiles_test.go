@@ -1272,3 +1272,60 @@ func TestRenderedFileFailureKeepsPreviousRender(t *testing.T) {
 		t.Fatalf("temp litter beside keeper: %s", e.Name())
 	}
 }
+
+// TestDeployRefusesTildeDestWhenHomeUnavailable: with the home lookup
+// failing (HOME unset), a "~/.bashrc" dest must be refused — the old
+// expandHome passed it through unexpanded and Deploy reported "deployed"
+// while writing the file under a literal "~" directory relative to the
+// working directory (probed before the fix). The damage must not exist in
+// cwd, and the plain-dest path must be untouched by the guard.
+func TestDeployRefusesTildeDestWhenHomeUnavailable(t *testing.T) {
+	t.Setenv("HOME", "")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "bashrc.tmpl")
+	if err := os.WriteFile(src, []byte("export NESTOR=1\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(cwd) })
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	res := d.Deploy(Template{Src: "bashrc.tmpl", Dest: "~/.bashrc"})
+	if res.Status != StatusError {
+		t.Fatalf("want StatusError for tilde dest with unavailable home, got %s (%v)", res.Status, res.Err)
+	}
+	literal := filepath.Join(work, "~")
+	if _, err := os.Stat(literal); err == nil {
+		t.Errorf("unexpanded dest was written: %s exists", literal)
+		os.RemoveAll(literal)
+	}
+
+	// The guard keys on the defect, not on tilde paths generally: a plain
+	// dest still deploys with the home lookup failing.
+	res = d.Deploy(Template{Src: "bashrc.tmpl", Dest: ".bashrc"})
+	if res.Status != StatusDeployed {
+		t.Fatalf("plain dest should deploy unaffected, got %s (%v)", res.Status, res.Err)
+	}
+	if _, err := os.Stat(filepath.Join(work, ".bashrc")); err != nil {
+		t.Errorf("plain dest not deployed: %v", err)
+	}
+}
+
+// TestCheckRefusesTildeDestWhenHomeUnavailable: drift Check with an
+// unavailable home reports unknown for a tilde dest rather than probing a
+// bogus literal-"~" path.
+func TestCheckRefusesTildeDestWhenHomeUnavailable(t *testing.T) {
+	t.Setenv("HOME", "")
+	dir := t.TempDir()
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	if got := d.Check("bashrc.tmpl", "~/.bashrc"); got != CheckUnknown {
+		t.Errorf("Check(~/.bashrc) with unavailable home = %s, want CheckUnknown", got)
+	}
+}

@@ -81,10 +81,11 @@ func Validate(data []byte) (*config.Config, error) {
 // The "~user/..." form is NOT expanded and is rejected instead: see
 // pathutil.IsOtherUserTilde.
 func Write(data []byte, dest string, overwrite bool) error {
-	if pathutil.IsOtherUserTilde(dest) {
-		return fmt.Errorf("dest %q uses the ~user/... form, which nestor does not expand (it would write into your own home)", dest)
+	expanded, homeErr := pathutil.ResolveHome(dest, userHome())
+	if homeErr != nil {
+		return fmt.Errorf("dest: %w", homeErr)
 	}
-	dest = pathutil.ExpandHome(dest, userHome())
+	dest = expanded
 
 	if !overwrite {
 		if _, err := os.Stat(dest); err == nil {

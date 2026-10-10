@@ -65,7 +65,11 @@ func createIn(base string, destPaths []string) (*Snapshot, error) {
 	}
 
 	for _, p := range destPaths {
-		p = expandHome(p)
+		expanded, err := pathutil.ResolveHome(p, currentHome())
+		if err != nil {
+			return nil, fmt.Errorf("backup %s: %w", p, err)
+		}
+		p = expanded
 		if _, err := os.Stat(p); err != nil {
 			// doesn't exist yet — nothing to back up
 			continue
@@ -303,4 +307,12 @@ func expandHome(p string) string {
 		home = ""
 	}
 	return pathutil.ExpandHome(p, home)
+}
+
+// currentHome returns the current user's home, or "" when the lookup fails.
+// createIn resolves backup paths through pathutil.ResolveHome so an
+// unavailable home refuses tilde paths instead of backing them up unexpanded.
+func currentHome() string {
+	home, _ := userHomeDir()
+	return home
 }
