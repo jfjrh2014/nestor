@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,5 +122,62 @@ func TestRemoteRemoveRemovesOrigin(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "removed remote 'origin' (was file:///tmp/gone.git)") {
 		t.Fatalf("output missing removal line:\n%s", out.String())
+	}
+}
+
+// withGitlessPATH empties PATH for the test so exec.LookPath("git") fails,
+// simulating a machine without git. Restored by t.Setenv's cleanup.
+func withGitlessPATH(t *testing.T) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+}
+
+func TestRemoteShowWithoutGitRefuses(t *testing.T) {
+	remoteTestDir(t)
+	withGitlessPATH(t)
+	var out bytes.Buffer
+	err := runRemoteShowOut(&out)
+	if !errors.Is(err, vcs.ErrGitNotFound) {
+		t.Fatalf("err = %v, want ErrGitNotFound", err)
+	}
+}
+
+func TestRemoteRemoveWithoutGitRefuses(t *testing.T) {
+	dir := remoteTestDir(t)
+	// Remote IS configured; without git the old code let the swallowed
+	// exec failure read as "no remote configured (nothing to remove)".
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := vcs.SetRemote(dir, remoteName, "file:///tmp/nogit.git"); err != nil {
+		t.Fatalf("set remote: %v", err)
+	}
+	// Manual PATH swap (not t.Setenv) so it can be restored before the
+	// surviving-remote check: vcs.RemoteSet shells out to git and reads
+	// false under a gitless PATH.
+	origPATH := os.Getenv("PATH")
+	os.Setenv("PATH", t.TempDir())
+	defer os.Setenv("PATH", origPATH)
+	var out bytes.Buffer
+	err := runRemoteRemoveOut(&out)
+	os.Setenv("PATH", origPATH)
+	if !errors.Is(err, vcs.ErrGitNotFound) {
+		t.Fatalf("err = %v, want ErrGitNotFound", err)
+	}
+	if strings.Contains(out.String(), "no remote configured") {
+		t.Fatalf("output must not claim no-remote when git is missing:\n%s", out.String())
+	}
+	if !vcs.RemoteSet(dir, remoteName) {
+		t.Fatal("remote was removed despite gitless refusal")
+	}
+}
+
+func TestRemoteAddWithoutGitRefuses(t *testing.T) {
+	remoteTestDir(t)
+	withGitlessPATH(t)
+	var out bytes.Buffer
+	err := runRemoteAddOut("file:///tmp/x.git", &out)
+	if !errors.Is(err, vcs.ErrGitNotFound) {
+		t.Fatalf("err = %v, want ErrGitNotFound", err)
 	}
 }

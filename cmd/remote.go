@@ -68,7 +68,7 @@ func runRemoteAdd(url string) error {
 func runRemoteAddOut(url string, w io.Writer) error {
 	p := ui.New(w)
 	if !vcs.HasGit() {
-		return fmt.Errorf("git not found on PATH")
+		return vcs.ErrGitNotFound
 	}
 	dir, err := nestorConfigDir()
 	if err != nil {
@@ -89,6 +89,9 @@ func runRemoteShow() error {
 }
 
 func runRemoteShowOut(w io.Writer) error {
+	if !vcs.HasGit() {
+		return vcs.ErrGitNotFound
+	}
 	p := ui.New(w)
 	dir, err := nestorConfigDir()
 	if err != nil {
@@ -108,6 +111,9 @@ func runRemoteRemove() error {
 }
 
 func runRemoteRemoveOut(w io.Writer) error {
+	if !vcs.HasGit() {
+		return vcs.ErrGitNotFound
+	}
 	p := ui.New(w)
 	dir, err := nestorConfigDir()
 	if err != nil {
