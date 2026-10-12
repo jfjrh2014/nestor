@@ -1120,3 +1120,157 @@ func TestCreateInRefusesTildeDestWhenHomeUnavailable(t *testing.T) {
 		t.Fatalf("plain backup count = %d, want 1", len(snap.Files))
 	}
 }
+
+// TestRestoreTildeDest: a manifest whose Original is a tilde path must be
+// expanded against the real home, not copied to a literal "~" directory
+// under the cwd (probed: copyFile would land <cwd>/.bashrc via a temp file
+// inside ./~). Mirrors the createIn guard from the 2026-10-10 fix — the
+// restore side of the same boundary was missed.
+func TestRestoreTildeDest(t *testing.T) {
+	base := t.TempDir()
+	home := t.TempDir()
+	swapHome(t, home)
+	work := t.TempDir()
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(cwd) })
+
+	// Build a snapshot manifest by hand: Original "~/.bashrc", Backup flat
+	// name, exactly the shape sanitizePath produces for the expanded path.
+	snapDir := filepath.Join(base, "20260101-000000")
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backupRel := sanitizePath(filepath.Join(home, ".bashrc"))
+	if err := os.WriteFile(filepath.Join(snapDir, backupRel), []byte("before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"20260101-000000","created_at":"2026-01-01T00:00:00Z","files":[{"original":"~/.bashrc","backup":%q}]}`, backupRel)
+	if err := writeAtomic(filepath.Join(snapDir, "manifest.json"), []byte(manifest)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := restoreIn(base, "20260101-000000"); err != nil {
+		t.Fatalf("restoreIn: %v", err)
+	}
+
+	// The real home file holds the restored contents...
+	data, err := os.ReadFile(filepath.Join(home, ".bashrc"))
+	if err != nil {
+		t.Fatalf("reading restored file: %v", err)
+	}
+	if string(data) != "before" {
+		t.Errorf("restored contents = %q, want %q", string(data), "before")
+	}
+	// ...and no literal "~" directory appeared in the cwd.
+	if _, err := os.Stat(filepath.Join(work, "~")); err == nil {
+		os.RemoveAll(filepath.Join(work, "~"))
+		t.Errorf("literal tilde dir created in cwd: %s", filepath.Join(work, "~"))
+	}
+}
+
+// TestRestoreRefusesOtherUserTilde: "~user/..." in a manifest is refused —
+// the old code would silently write into $HOME/root/.bashrc.
+func TestRestoreRefusesOtherUserTilde(t *testing.T) {
+	base := t.TempDir()
+	home := t.TempDir()
+	swapHome(t, home)
+	snapDir := filepath.Join(base, "20260101-000000")
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Decoy: the file the old code would have written into.
+	if err := os.MkdirAll(filepath.Join(home, "root"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	decoy := filepath.Join(home, "root", ".bashrc")
+	if err := os.WriteFile(decoy, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backupRel := sanitizePath(filepath.Join(home, "root", ".bashrc"))
+	if err := os.WriteFile(filepath.Join(snapDir, backupRel), []byte("clobber"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"20260101-000000","created_at":"2026-01-01T00:00:00Z","files":[{"original":"~root/.bashrc","backup":%q}]}`, backupRel)
+	if err := writeAtomic(filepath.Join(snapDir, "manifest.json"), []byte(manifest)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := restoreIn(base, "20260101-000000")
+	if err == nil {
+		t.Fatal("restoreIn(~user dest) = nil error, want refusal")
+	}
+	if !strings.Contains(err.Error(), "~user/... form") {
+		t.Errorf("error text = %q, want ~user refusal reason", err)
+	}
+	// The refusal must be BEFORE the copy: decoy byte-for-byte unchanged.
+	data, _ := os.ReadFile(decoy)
+	if string(data) != "original" {
+		t.Errorf("decoy clobbered despite refusal: %q", string(data))
+	}
+}
+
+// TestRestoreTildeDestHomeUnavailable: like createIn, restore refuses tilde
+// dests when the home lookup fails instead of writing under a literal "~".
+func TestRestoreTildeDestHomeUnavailable(t *testing.T) {
+	base := t.TempDir()
+	work := t.TempDir()
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(cwd) })
+
+	snapDir := filepath.Join(base, "20260101-000000")
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backupRel := sanitizePath("/home/x/.bashrc")
+	if err := os.WriteFile(filepath.Join(snapDir, backupRel), []byte("before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"20260101-000000","created_at":"2026-01-01T00:00:00Z","files":[{"original":"~/.bashrc","backup":%q}]}`, backupRel)
+	if err := writeAtomic(filepath.Join(snapDir, "manifest.json"), []byte(manifest)); err != nil {
+		t.Fatal(err)
+	}
+
+	swapHomeErr(t)
+	_, err := restoreIn(base, "20260101-000000")
+	if err == nil {
+		t.Fatal("restoreIn(tilde dest, unavailable home) = nil error, want refusal")
+	}
+	if !strings.Contains(err.Error(), "home directory is unavailable") {
+		t.Errorf("error text = %q, want home-unavailable reason", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "~")); err == nil {
+		os.RemoveAll(filepath.Join(work, "~"))
+		t.Errorf("literal tilde dir created in cwd: %s", filepath.Join(work, "~"))
+	}
+}
+
+// TestRestorePlainDestUnaffected: absolute paths restore exactly as before —
+// the guard keys on the tilde defect, not on restore generally.
+func TestRestorePlainDestUnaffected(t *testing.T) {
+	base := t.TempDir()
+	dest := filepath.Join(base, "dest.yml")
+	if err := os.WriteFile(dest, []byte("after"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := createIn(base, []string{dest})
+	if err != nil {
+		t.Fatalf("createIn: %v", err)
+	}
+	// Manifest now holds an absolute Original; restore must hit it directly.
+	if err := os.WriteFile(dest, []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restoreIn(base, snap.ID); err != nil {
+		t.Fatalf("restoreIn: %v", err)
+	}
+	data, _ := os.ReadFile(dest)
+	if string(data) != "after" {
+		t.Errorf("restored contents = %q, want %q", string(data), "after")
+	}
+}

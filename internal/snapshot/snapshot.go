@@ -193,8 +193,17 @@ func restoreIn(base, id string) (*Snapshot, error) {
 	}
 
 	for _, f := range snap.Files {
+		// Resolve the dest the same way createIn resolves backup sources: a
+		// manifest may hold a tilde path (hand-edited, restored across
+		// machines, or written by an older build), and copying straight to
+		// f.Original lands "~/.bashrc" in a literal "~" directory relative
+		// to the cwd — same silent-corruption class as the deploy side.
+		dest, err := pathutil.ResolveHome(f.Original, currentHome())
+		if err != nil {
+			return nil, fmt.Errorf("restore %s: %w", f.Original, err)
+		}
 		backup := filepath.Join(snapDir, f.Backup)
-		if err := copyFile(backup, f.Original); err != nil {
+		if err := copyFile(backup, dest); err != nil {
 			return nil, fmt.Errorf("restore %s: %w", f.Original, err)
 		}
 	}
