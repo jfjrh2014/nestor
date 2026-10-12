@@ -1329,3 +1329,73 @@ func TestCheckRefusesTildeDestWhenHomeUnavailable(t *testing.T) {
 		t.Errorf("Check(~/.bashrc) with unavailable home = %s, want CheckUnknown", got)
 	}
 }
+
+func TestRenderHomeFunc(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(dir, "gitignore.tmpl")
+	// The renderTemplate doc promises the built-in function map (env, home);
+	// before this test the map only registered env, so {{ home }} failed to
+	// parse with `function "home" not defined` on every deploy of a template
+	// using the documented function.
+	if err := os.WriteFile(src, []byte("cache={{ home }}/.cache\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	got, err := Render(src)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	want := "cache=" + home + "/.cache\n"
+	if string(got) != want {
+		t.Fatalf("rendered output = %q, want %q", got, want)
+	}
+}
+
+func TestDeployTemplateHomeFunc(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(dir, "gitconfig.tmpl")
+	if err := os.WriteFile(src, []byte("[core]\n\texcludesfile = {{ home }}/.gitignore_global\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "out", ".gitconfig")
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	r := d.Deploy(Template{Src: "gitconfig.tmpl", Dest: dest})
+	if r.Status != StatusDeployed {
+		t.Fatalf("expected Deployed, got %s (%v)", r.Status, r.Err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	want := "[core]\n\texcludesfile = " + home + "/.gitignore_global\n"
+	if string(got) != want {
+		t.Fatalf("content mismatch: %q, want %q", got, want)
+	}
+}
+
+func TestCheckTemplateHomeFuncPresent(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(dir, "shellrc.tmpl")
+	if err := os.WriteFile(src, []byte("export PATH={{ home }}/bin\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "out", ".shellrc")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir dest dir: %v", err)
+	}
+	if err := os.WriteFile(dest, []byte("export PATH="+home+"/bin\n"), 0o600); err != nil {
+		t.Fatalf("write dest: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	if status := d.Check("shellrc.tmpl", dest); status != CheckPresent {
+		t.Fatalf("expected Present (home renders, matches dest), got %s", status)
+	}
+}

@@ -213,7 +213,8 @@ func (d Deployer) symlink(src, dest string, t Template) Result {
 func renderTemplate(path string) ([]byte, error) {
 	tmpl, err := template.New(filepath.Base(path)).
 		Funcs(template.FuncMap{
-			"env": os.Getenv,
+			"env":  os.Getenv,
+			"home": currentHome,
 		}).
 		Option("missingkey=error").
 		ParseFiles(path)
