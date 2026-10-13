@@ -1399,3 +1399,106 @@ func TestCheckTemplateHomeFuncPresent(t *testing.T) {
 		t.Fatalf("expected Present (home renders, matches dest), got %s", status)
 	}
 }
+
+// TestCheckCopyStrategyForeignLink: a symlink dest under the COPY strategy is
+// a state copy can never have created — copy refuses to write through links
+// (TestCopyDeployRefusesSymlinkDest), so Check reporting "drifted" would send
+// the user to an 'up' that fails with a symlink refusal instead of fixing
+// anything. The blocked state gets its own verdict.
+func TestCheckCopyStrategyForeignLink(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(src, []byte("[user]\n\tname = marcus\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	// Link to a file whose content MATCHES src: under the old code this read
+	// as plain drift (Readlink target != src path), proving the verdict came
+	// from the link itself, not the content behind it.
+	target := filepath.Join(dir, "upstream-gitconfig")
+	if err := os.WriteFile(target, []byte("[user]\n\tname = marcus\n"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	dest := filepath.Join(dir, ".gitconfig")
+	if err := os.Symlink(target, dest); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir}
+	if status := d.Check("gitconfig", dest); status != CheckForeignLink {
+		t.Fatalf("expected CheckForeignLink for symlink dest under copy strategy, got %s", status)
+	}
+
+	// A link whose content differs reports the same verdict — the blockage is
+	// keyed on the link, not on what it points at.
+	other := filepath.Join(dir, "other.conf")
+	if err := os.WriteFile(other, []byte("different\n"), 0o600); err != nil {
+		t.Fatalf("write other: %v", err)
+	}
+	dest2 := filepath.Join(dir, ".other")
+	if err := os.Symlink(other, dest2); err != nil {
+		t.Fatalf("symlink2: %v", err)
+	}
+	if status := d.Check("gitconfig", dest2); status != CheckForeignLink {
+		t.Fatalf("expected CheckForeignLink for mismatched-link dest, got %s", status)
+	}
+
+	// A dangling link too: nothing at the far end, still a foreign link.
+	dest3 := filepath.Join(dir, ".dangling")
+	if err := os.Symlink(filepath.Join(dir, "gone"), dest3); err != nil {
+		t.Fatalf("symlink3: %v", err)
+	}
+	if status := d.Check("gitconfig", dest3); status != CheckForeignLink {
+		t.Fatalf("expected CheckForeignLink for dangling link, got %s", status)
+	}
+
+	// The regular-file re-deploy path is untouched: same src/dest pair that
+	// used to work still reports Present.
+	plain := filepath.Join(dir, ".plain")
+	if err := os.WriteFile(plain, []byte("[user]\n\tname = marcus\n"), 0o600); err != nil {
+		t.Fatalf("write plain: %v", err)
+	}
+	if status := d.Check("gitconfig", plain); status != CheckPresent {
+		t.Fatalf("regular-file Check changed behavior: got %s", status)
+	}
+}
+
+// TestCheckSymlinkStrategyStillReadsLinkTarget: the foreign-link verdict must
+// not swallow symlink-strategy deployments — a link Check recognizes as
+// deployed-from-src still reports Present under the symlink strategy.
+func TestCheckSymlinkStrategyStillReadsLinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "linked.conf")
+	if err := os.WriteFile(src, []byte("key=value\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, ".config-link")
+	if err := os.Symlink(src, dest); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategySymlink, Source: dir}
+	if status := d.Check("linked.conf", dest); status != CheckPresent {
+		t.Fatalf("symlink-strategy link should still be Present, got %s", status)
+	}
+
+	// And a symlink-strategy link to the WRONG target still drifts.
+	other := filepath.Join(dir, "wrong.conf")
+	if err := os.WriteFile(other, []byte("nope\n"), 0o600); err != nil {
+		t.Fatalf("write wrong: %v", err)
+	}
+	dest2 := filepath.Join(dir, ".wrong-link")
+	if err := os.Symlink(other, dest2); err != nil {
+		t.Fatalf("symlink2: %v", err)
+	}
+	if status := d.Check("linked.conf", dest2); status != CheckDrifted {
+		t.Fatalf("symlink-strategy wrong-target link should Drift, got %s", status)
+	}
+}
+
+// TestCheckForeignLinkString pins the new verdict's display name.
+func TestCheckForeignLinkString(t *testing.T) {
+	if got := CheckForeignLink.String(); got != "foreign-link" {
+		t.Fatalf("CheckForeignLink.String() = %q, want %q", got, "foreign-link")
+	}
+}

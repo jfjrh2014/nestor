@@ -176,6 +176,10 @@ func runDoctorProfileOut(ctx context.Context, profileName string, w io.Writer) e
 				absent++
 				issues++
 				p.Error(fmt.Sprintf("source missing: %s", t.Src))
+			case dotfiles.CheckForeignLink:
+				drifted++
+				issues++
+				p.Warn(fmt.Sprintf("dest is a symlink owned by another tool (chezmoi/stow, or a symlink-strategy deploy): %s — 'nestor up' would refuse it; remove the link or switch dotfiles.strategy to symlink", t.Dest))
 			}
 		}
 		if drifted+absent == 0 {

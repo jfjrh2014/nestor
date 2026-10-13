@@ -185,8 +185,16 @@ func dashLoadStatus(cfg *config.Config, profileName string) tea.Cmd {
 			case dotfiles.CheckDrifted:
 				present = true
 				drift = true
+			case dotfiles.CheckForeignLink:
+				// A symlink dest under copy strategy: up refuses it, so it
+				// can never be "deployed" by nestor — count as present-but-
+				// drifted so the dashboard shows the blockage, not a green row.
+				present = true
+				drift = true
 			case dotfiles.CheckAbsent, dotfiles.CheckSrcMissing:
 				// present stays false
+			case dotfiles.CheckUnknown:
+				// unresolvable dest: not present, not drifted
 			}
 
 			dotStatuses = append(dotStatuses, dashDotfileStatus{

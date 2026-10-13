@@ -172,6 +172,10 @@ func runDiffOut(ctx context.Context, profileName string, w io.Writer) error {
 				drifted++
 				driftCount++
 				p.Warn(fmt.Sprintf("unsupported dest (the ~user/... form): %s", t.Dest))
+			case dotfiles.CheckForeignLink:
+				drifted++
+				driftCount++
+				p.Warn(fmt.Sprintf("dest is a symlink owned by another tool (chezmoi/stow, or a symlink-strategy deploy): %s — 'nestor up' would refuse it; remove the link or switch dotfiles.strategy to symlink", t.Dest))
 			}
 		}
 		p.Info(fmt.Sprintf("%d present, %d drifted, %d missing", present, drifted, absent))

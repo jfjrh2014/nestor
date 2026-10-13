@@ -138,6 +138,9 @@ func runListOut(_ context.Context, profileName string, w io.Writer) error {
 			case dotfiles.CheckSrcMissing:
 				dotMissing++
 				p.Warn(fmt.Sprintf("%-30s  src missing", t.Src))
+			case dotfiles.CheckForeignLink:
+				dotMissing++
+				p.Warn(fmt.Sprintf("%-30s  symlink owned by another tool (up would refuse)", t.Dest))
 			}
 		}
 	}

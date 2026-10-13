@@ -150,3 +150,62 @@ profiles:
 		t.Errorf("profile diff should report workrc dest missing; output:\n%s", out)
 	}
 }
+
+// TestDiffForeignLinkAdvisesCorrectly is the regression for the copy-strategy
+// symlink-dest misreport: Check called a foreign link "drifted", so diff's
+// summary told the user to run 'nestor up' — which refuses symlink dests
+// under copy strategy. The verdict and the advice must both name the real
+// problem: a link another tool owns, fixable by removing it or by switching
+// dotfiles.strategy to symlink.
+func TestDiffForeignLinkAdvisesCorrectly(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	srcDir := filepath.Join(dir, "dotfiles")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "gitconfig"), []byte("[user]\n\tname = t\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Dest is a symlink whose target content MATCHES src: under the old code
+	// this read as plain drift ("run up to fix").
+	target := filepath.Join(dir, "upstream")
+	if err := os.WriteFile(target, []byte("[user]\n\tname = t\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, ".gitconfig")
+	if err := os.Symlink(target, dest); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgContent := `version: 1
+packages:
+  common: []
+dotfiles:
+  source: ` + srcDir + `
+  strategy: copy
+  templates:
+    - src: gitconfig
+      dest: ` + dest + `
+secrets:
+  mappings: []
+`
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runDiffForTest(t, cfgPath, "")
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	if !strings.Contains(out, "symlink owned by another tool") {
+		t.Errorf("diff should name the foreign link, not plain drift; output:\n%s", out)
+	}
+	if !strings.Contains(out, "dotfiles.strategy to symlink") {
+		t.Errorf("diff should offer the strategy-switch remedy; output:\n%s", out)
+	}
+	// The dangerous advice must be gone: no bare "drifted:" line for this dest.
+	if strings.Contains(out, "drifted: "+dest) {
+		t.Errorf("foreign link must not read as plain drift; output:\n%s", out)
+	}
+}

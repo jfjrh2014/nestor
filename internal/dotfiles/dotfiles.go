@@ -269,6 +269,15 @@ func (d Deployer) Check(src, dest string) CheckStatus {
 		return CheckAbsent
 	}
 	if stat.Mode()&os.ModeSymlink != 0 {
+		// Copy strategy never manages a symlink dest: Deploy refuses to write
+		// through links (see Deployer.copy — the link's TARGET would be
+		// silently overwritten). Reporting "drifted" here would send the user
+		// to an 'up' that fails with a different error, so the blocked state
+		// gets its own verdict instead. Only symlink strategy reads the link
+		// target below.
+		if d.Strategy != StrategySymlink {
+			return CheckForeignLink
+		}
 		// For symlinks, check if target points to src — either directly
 		// (plain files) or at the deployed render of src (the .tmpl symlink
 		// strategy links a temp file holding rendered output, see
@@ -311,6 +320,11 @@ const (
 	CheckAbsent
 	CheckSrcMissing
 	CheckUnknown
+	// CheckForeignLink: the dest is a symlink but the deploy strategy is
+	// copy — a state copy can never have created and refuses to write
+	// through. Distinct from CheckDrifted so drift reports don't advise an
+	// 'up' that will fail with a symlink refusal instead of fixing anything.
+	CheckForeignLink
 )
 
 func (s CheckStatus) String() string {
@@ -325,6 +339,8 @@ func (s CheckStatus) String() string {
 		return "src-missing"
 	case CheckUnknown:
 		return "unsupported-dest"
+	case CheckForeignLink:
+		return "foreign-link"
 	}
 	return "unknown"
 }
