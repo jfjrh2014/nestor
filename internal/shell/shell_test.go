@@ -615,3 +615,108 @@ func TestInstallPlugins_MkdirFails(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteSourceBlock_RefusesReversedMarkers: both markers present but end
+// before begin. The replace guard only ever matches the in-order shape, so
+// the reversed shape used to fall through to the append branch — a fresh
+// block appended on every run while the stale block's source lines never
+// updated. Same refusal contract as the half-removed block: the file is left
+// byte-for-byte intact.
+func TestWriteSourceBlock_RefusesReversedMarkers(t *testing.T) {
+	dir := t.TempDir()
+	rcPath := filepath.Join(dir, ".zshrc")
+
+	orig := "# my config\n" + markerEnd + "\nsource ~/z.sh\n" + markerBegin + "\nsource ~/old.zsh\n" + markerEnd + "\n# user footer\n"
+	os.WriteFile(rcPath, []byte(orig), 0644)
+
+	for i := 1; i <= 3; i++ {
+		err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"})
+		if err == nil {
+			t.Fatalf("run %d: expected refusal on reversed markers, got nil", i)
+		}
+		if !contains(err.Error(), "reversed") {
+			t.Errorf("run %d: error should describe the defect, got: %v", i, err)
+		}
+	}
+
+	data, _ := os.ReadFile(rcPath)
+	if string(data) != orig {
+		t.Errorf("rc was modified across 3 refusals:\nwant %q\ngot  %q", orig, string(data))
+	}
+	if countStr(string(data), markerBegin) != 1 {
+		t.Error("refused runs must not append managed blocks")
+	}
+}
+
+// TestWriteSourceBlock_UpdatesSymlinkedRCTarget: a stow/dotfiles-repo rc is a
+// symlink into a managed repo. The durable temp+rename write used to replace
+// the link with a regular file on the first 'up', silently un-symlinking it
+// from the repo. The write must land in the target and the link must survive.
+func TestWriteSourceBlock_UpdatesSymlinkedRCTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "managed", "zshrc")
+	os.MkdirAll(filepath.Dir(target), 0o755)
+	orig := "# my config\n" + markerBegin + "\nsource ~/old.zsh\n" + markerEnd + "\n"
+	os.WriteFile(target, []byte(orig), 0o600)
+
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.Symlink(target, rcPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"}); err != nil {
+		t.Fatalf("WriteSourceBlock through symlink: %v", err)
+	}
+
+	info, err := os.Lstat(rcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("rc symlink was replaced by a regular file")
+	}
+
+	data, _ := os.ReadFile(target)
+	content := string(data)
+	if !contains(content, "source /fake/p/p.zsh") || contains(content, "source ~/old.zsh") {
+		t.Errorf("target not updated in place:\n%q", content)
+	}
+	if !contains(content, "# my config") {
+		t.Error("user lines in target clobbered")
+	}
+	if countStr(content, markerBegin) != 1 || countStr(content, markerEnd) != 1 {
+		t.Errorf("expected exactly one managed block in target:\n%s", content)
+	}
+
+	// Idempotent through the link: a second run still leaves one block.
+	if err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"}); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	data, _ = os.ReadFile(target)
+	if countStr(string(data), markerBegin) != 1 {
+		t.Error("second run duplicated the managed block")
+	}
+}
+
+// TestWriteSourceBlock_RefusesDanglingSymlink: a link whose target is gone
+// has nothing to follow and nothing to write — refusing beats materializing
+// a fresh rc file at the (now existing) link target behind the user's back.
+func TestWriteSourceBlock_RefusesDanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "gone", "zshrc")
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.Symlink(target, rcPath); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"})
+	if err == nil {
+		t.Fatal("expected refusal on dangling symlink rc, got nil")
+	}
+	if !contains(err.Error(), "broken symlink") {
+		t.Errorf("error should describe the defect, got: %v", err)
+	}
+	if _, statErr := os.Lstat(target); statErr == nil {
+		t.Error("dangling target was materialized on refusal")
+	}
+}

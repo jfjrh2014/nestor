@@ -237,9 +237,28 @@ func SourceLines(results []PluginResult) (lines []string, unresolved []Plugin) {
 // byte-for-byte intact: proceeding would either silently delete the user
 // lines sitting under the stray begin marker or append a fresh block while
 // the stray end marker keeps the replace branch from ever matching — one
-// duplicated block per run, forever. Repair is one hand edit: remove the
-// stray marker line, then re-run.
+// duplicated block per run, forever. The same refusal covers both markers
+// present but out of order (end before begin): the replace guard can only
+// ever match the in-order shape, so falling through to the append branch
+// from the reversed shape is the identical one-duplicated-block-per-run
+// corruption (probed). Repair is one hand edit: remove the stray marker
+// line(s), then re-run.
+//
+// A symlinked rc is followed for reading and its target written in place
+// (the link is preserved): the durable temp+rename write would otherwise
+// silently replace the user's link — a stow/dotfiles-repo rc — with a
+// regular file, un-symlinking it from their repo (probed). A dangling
+// link (target missing) is refused: nothing to follow, nothing to write.
 func WriteSourceBlock(rcPath string, sourceLines []string) error {
+	if isDanglingSymlink(rcPath) {
+		return fmt.Errorf("%s is a broken symlink — repair or remove it by hand, then re-run 'nestor up'", rcPath)
+	}
+
+	rcReal, err := filepath.EvalSymlinks(rcPath)
+	if err == nil {
+		rcPath = rcReal
+	}
+
 	existing, _ := os.ReadFile(rcPath)
 	content := string(existing)
 
@@ -255,6 +274,10 @@ func WriteSourceBlock(rcPath string, sourceLines []string) error {
 
 	if (beginIdx >= 0) != (endIdx >= 0) {
 		return fmt.Errorf("%s has a half-removed nestor block (exactly one of the two nestor markers present) — remove the stray marker line by hand, then re-run 'nestor up'", rcPath)
+	}
+
+	if beginIdx >= 0 && endIdx >= 0 && endIdx < beginIdx {
+		return fmt.Errorf("%s has a reversed nestor block (end marker before begin marker) — remove both marker lines by hand, then re-run 'nestor up'", rcPath)
 	}
 
 	if beginIdx >= 0 && endIdx >= 0 && endIdx > beginIdx {
@@ -284,4 +307,18 @@ func WriteSourceBlock(rcPath string, sourceLines []string) error {
 		return fmt.Errorf("stat rc: %w", err)
 	}
 	return fsutil.WriteFileSync(rcPath, []byte(content), perm)
+}
+
+// isDanglingSymlink reports whether path is a symlink whose target does not
+// exist. A plain file (or a link whose target exists) is not dangling; a
+// missing file is not a link at all.
+func isDanglingSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	if _, err := os.Stat(path); err != nil {
+		return true
+	}
+	return false
 }
