@@ -184,14 +184,18 @@ func (d Deployer) symlink(src, dest string, t Template) Result {
 	tmpLink := dest + ".nestor-tmp-link"
 	_ = os.Remove(tmpLink)
 	if err := os.Symlink(linkTarget, tmpLink); err != nil {
-		// Peerless fallback: if symlinking fails (permissions, FS, etc.),
-		// attempt a unix-style ln — dest is still intact here, so a failed
-		// fallback leaves the user's file untouched.
+		// Fallback: copy the content instead of linking. Symlinking fails for
+		// real on filesystems without symlink support (exFAT, some network
+		// mounts), so this is a working deployment path, not a curiosity.
+		//
+		// fallbackCopy is durable (temp+rename): on success dest already holds
+		// the new content as a fresh regular file, and on failure dest is
+		// untouched. The old os.Remove(dest) here predated the durable writer
+		// (when the fallback wrote through dest) and deleted the fresh copy
+		// while reporting StatusDeployed — probed: dest gone after a "deployed"
+		// fallback. No removal, no second error branch.
 		if fallbackErr := fallbackCopy(linkTarget, dest); fallbackErr != nil {
 			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("symlink: %w (fallback: %v)", err, fallbackErr)}
-		}
-		if rmErr := os.Remove(dest); rmErr != nil {
-			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("symlink: %w (fallback copy landed; removing old dest failed: %v)", err, rmErr)}
 		}
 		return Result{Template: t, Status: StatusDeployed}
 	}

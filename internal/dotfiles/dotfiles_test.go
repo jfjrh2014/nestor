@@ -1502,3 +1502,48 @@ func TestCheckForeignLinkString(t *testing.T) {
 		t.Fatalf("CheckForeignLink.String() = %q, want %q", got, "foreign-link")
 	}
 }
+
+// TestSymlinkFallbackKeepsCopyLanded: when the symlink step fails but the
+// fallback copy succeeds (e.g. a filesystem without symlink support), the
+// fallback's durable write already replaced dest — the old os.Remove(dest)
+// after it deleted the fresh copy while reporting StatusDeployed.
+func TestSymlinkFallbackKeepsCopyLanded(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "plain.conf")
+	if err := os.WriteFile(src, []byte("rendered content\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	dest := filepath.Join(dir, "rc.conf")
+	if err := os.WriteFile(dest, []byte("OLD\n"), 0o600); err != nil {
+		t.Fatalf("write dest: %v", err)
+	}
+	// Force ONLY the symlink step to fail: a non-empty directory at the
+	// temp-link name defeats the pre-remove and os.Symlink (EEXIST), while
+	// dest itself stays a regular file the fallback can replace.
+	tmpLinkDir := dest + ".nestor-tmp-link"
+	if err := os.MkdirAll(filepath.Join(tmpLinkDir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir tmp-link: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategySymlink, Source: dir}
+	r := d.Deploy(Template{Src: "plain.conf", Dest: dest})
+
+	if r.Status != StatusDeployed {
+		t.Fatalf("expected Deployed when fallback copy succeeds, got %s (err: %v)", r.Status, r.Err)
+	}
+	info, err := os.Lstat(dest)
+	if err != nil {
+		t.Fatalf("dest missing after a 'deployed' fallback: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("dest is a symlink; expected the fallback's regular-file copy")
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if string(got) != "rendered content\n" {
+		t.Fatalf("dest content = %q, want the fallback copy", got)
+	}
+}
