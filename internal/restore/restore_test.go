@@ -460,3 +460,41 @@ func TestWriteRefusesTildeDestWhenHomeUnavailable(t *testing.T) {
 		t.Errorf("plain dest missing after write: %v", err)
 	}
 }
+
+// TestWriteRefusesSymlinkDest: restore -o pointed at a stow-style symlinked
+// config used to report success while the durable rename silently replaced
+// the link with a regular file (bytes landed nowhere the link pointed,
+// target untouched — probed). fsutil now refuses; this pins the boundary
+// end-to-end, including that the old file survives byte-for-byte.
+func TestWriteRefusesSymlinkDest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	target := filepath.Join(dir, "real-nestor.yml")
+	if err := os.WriteFile(target, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "nestor.yml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Write([]byte("version: 999\n"), link, true); err == nil {
+		t.Fatal("expected refusal writing over a symlinked dest")
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("dest was replaced with a regular file: mode %v", info.Mode())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "version: 1\n" {
+		t.Errorf("target content = %q, want byte-for-byte unchanged", got)
+	}
+}

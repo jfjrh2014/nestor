@@ -15,6 +15,15 @@ import (
 // complete new contents — never a truncated half-file. On any failure the
 // temp file is removed and the destination is left byte-for-byte unchanged.
 //
+// A symlinked path is refused, not written through: rename does not follow
+// links, so the durable write would silently replace the user's link (a
+// stow/dotfiles-repo file) with a regular file and land the bytes nowhere
+// they were pointed (probed: err nil, link gone, target untouched). A
+// caller that deliberately follows links resolves the target itself first
+// (shell.WriteSourceBlock does); a caller that must never write through a
+// link gets the refusal for free (secrets inject, restore, snapshot
+// restore).
+//
 // perm is applied to the new file regardless of umask (CreateTemp starts at
 // 0600; a chmod error is a real error, matching the copy paths).
 func WriteFileSync(path string, data []byte, perm os.FileMode) error {
@@ -25,6 +34,10 @@ func WriteFileSync(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; resolve or remove it before writing", path)
+	}
+
 	tmp, err := os.CreateTemp(dir, ".nestor-write-*")
 	if err != nil {
 		return err

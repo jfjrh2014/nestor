@@ -183,3 +183,90 @@ func TestCopyFileSyncFailureKeepsDest(t *testing.T) {
 		t.Errorf("temp litter left behind: %v", litter)
 	}
 }
+
+// TestWriteFileSyncRefusesSymlinkDest: rename does not follow symlinks, so
+// the durable temp+rename write silently replaced a symlinked dest with a
+// regular file while reporting success — the bytes landed nowhere the link
+// was pointed and the link was destroyed (probed before the guard existed).
+// The primitive refuses instead; callers that deliberately follow links
+// resolve the target first (shell.WriteSourceBlock).
+func TestWriteFileSyncRefusesSymlinkDest(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real-target")
+	if err := os.WriteFile(target, []byte("target-original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link-dest")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WriteFileSync(link, []byte("new contents\n"), 0o644)
+	if err == nil {
+		t.Fatal("expected refusal writing through a symlinked dest")
+	}
+
+	// The link survives untouched and the target keeps its bytes.
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("dest was replaced with a regular file: mode %v", info.Mode())
+	}
+	if tgt, err := os.Readlink(link); err != nil || tgt != target {
+		t.Errorf("link target = %q, %v; want %q", tgt, err, target)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "target-original\n" {
+		t.Errorf("target content = %q, want byte-for-byte unchanged", got)
+	}
+
+	// No temp litter from the aborted write.
+	litter, _ := filepath.Glob(filepath.Join(dir, ".nestor-write-*"))
+	if len(litter) != 0 {
+		t.Errorf("temp litter left behind: %v", litter)
+	}
+}
+
+// TestCopyFileSyncRefusesSymlinkDest: the durable copy inherits the same
+// refusal, pinning the snapshot-restore boundary (dest is the user's only
+// surviving copy — silently un-symlinking it would corrupt their repo
+// checkout while reporting success).
+func TestCopyFileSyncRefusesSymlinkDest(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "backup-src")
+	if err := os.WriteFile(src, []byte("backup-content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "real-target")
+	if err := os.WriteFile(target, []byte("target-original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link-dest")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CopyFileSync(src, link); err == nil {
+		t.Fatal("expected refusal copying over a symlinked dest")
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("dest was replaced with a regular file: mode %v", info.Mode())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "target-original\n" {
+		t.Errorf("target content = %q, want byte-for-byte unchanged", got)
+	}
+}

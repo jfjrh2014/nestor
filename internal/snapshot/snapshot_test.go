@@ -1274,3 +1274,66 @@ func TestRestorePlainDestUnaffected(t *testing.T) {
 		t.Errorf("restored contents = %q, want %q", string(data), "after")
 	}
 }
+
+// TestRestoreRefusesSymlinkDest: restoring a snapshot over a symlinked
+// original used to report success while the durable copy silently replaced
+// the link with a regular file (bytes landed nowhere the link pointed,
+// target untouched — probed). fsutil now refuses; this pins the
+// snapshot-restore boundary end-to-end.
+func TestRestoreRefusesSymlinkDest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	target := filepath.Join(dir, "real-zshrc")
+	if err := os.WriteFile(target, []byte("target-original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, ".zshrc")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	// Build a real snapshot of the target (the pre-link state createIn would
+	// have recorded), then rewrite the manifest so Original points at the
+	// symlinked dest — the shape that reaches the write boundary.
+	snap, err := Create([]string{target})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	_ = snap
+	snapDir := filepath.Join(dir, ".config", "nestor", "snapshots")
+	entries, err := os.ReadDir(snapDir)
+	if err != nil {
+		t.Fatalf("snapshot dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("Create produced no snapshot dir")
+	}
+	id := entries[len(entries)-1].Name()
+	if err := os.WriteFile(filepath.Join(snapDir, id, "test.bak"), []byte("restored-bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":%q,"files":[{"original":%q,"backup":"test.bak","mode":420}]}`, id, link)
+	if err := os.WriteFile(filepath.Join(snapDir, id, "manifest.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Restore(id); err == nil {
+		t.Fatal("expected refusal restoring over a symlinked dest")
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("dest was replaced with a regular file: mode %v", info.Mode())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "target-original\n" {
+		t.Errorf("target content = %q, want byte-for-byte unchanged", got)
+	}
+}
