@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -155,8 +156,29 @@ func Preview(cfg *config.Config) string {
 
 	if len(cfg.Profiles) > 0 {
 		b.WriteString(fmt.Sprintf("profiles: %d\n", len(cfg.Profiles)))
+		// Map iteration is random; render profiles in sorted order so the
+		// preview is deterministic (same config → same bytes).
+		names := make([]string, 0, len(cfg.Profiles))
 		for name := range cfg.Profiles {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			prof := cfg.Profiles[name]
 			b.WriteString(fmt.Sprintf("  - %s\n", name))
+			// Layered sections in the order 'nestor up --profile' deploys
+			// them: packages, then dotfiles, then secrets. Without these, the
+			// review before 'restore --from <team config>' listed the profile
+			// names but hid everything the profiles actually add.
+			for _, p := range prof.Packages {
+				b.WriteString(fmt.Sprintf("    packages: %s (profile %s)\n", p, name))
+			}
+			for _, t := range prof.Dotfiles {
+				b.WriteString(fmt.Sprintf("    dotfiles: %s → %s (profile %s)\n", t.Src, t.Dest, name))
+			}
+			for _, m := range prof.SecretMappings {
+				b.WriteString(fmt.Sprintf("    secrets: %s (profile %s)\n", m.Key, name))
+			}
 		}
 	}
 

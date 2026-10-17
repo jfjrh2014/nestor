@@ -498,3 +498,78 @@ func TestWriteRefusesSymlinkDest(t *testing.T) {
 		t.Errorf("target content = %q, want byte-for-byte unchanged", got)
 	}
 }
+
+func TestPreviewRendersProfileLayers(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Profiles: map[string]config.Profile{
+			"work": {
+				Packages: []string{"docker", "jq"},
+				Dotfiles: []config.Template{
+					{Src: "workgit.tmpl", Dest: "~/.workgitconfig"},
+				},
+				SecretMappings: []config.Mapping{
+					{Key: "corp_token"},
+				},
+			},
+		},
+	}
+
+	out := Preview(cfg)
+
+	checks := []string{
+		"profiles: 1",
+		"  - work",
+		"packages: docker (profile work)",
+		"packages: jq (profile work)",
+		"dotfiles: workgit.tmpl → ~/.workgitconfig (profile work)",
+		"secrets: corp_token (profile work)",
+	}
+
+	for _, check := range checks {
+		if !strings.Contains(out, check) {
+			t.Errorf("Preview() missing profile layer %q in output:\n%s", check, out)
+		}
+	}
+}
+
+func TestPreviewProfileWithNoLayersAddsNoLines(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Profiles: map[string]config.Profile{
+			"empty": {},
+		},
+	}
+
+	out := Preview(cfg)
+
+	if !strings.Contains(out, "profiles: 1") || !strings.Contains(out, "  - empty") {
+		t.Errorf("Preview() missing profile header in output:\n%s", out)
+	}
+	for _, stray := range []string{"packages:", "dotfiles:", "secrets:"} {
+		if strings.Contains(out[strings.Index(out, "profiles:"):], stray) {
+			t.Errorf("Preview() emitted %q for an empty profile:\n%s", stray, out)
+		}
+	}
+}
+
+func TestPreviewProfilesDeterministic(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Profiles: map[string]config.Profile{
+			"alpha": {Packages: []string{"a1"}},
+			"beta":  {Packages: []string{"b1"}},
+			"gamma": {Packages: []string{"g1"}},
+		},
+	}
+
+	first := Preview(cfg)
+	for i := 0; i < 20; i++ {
+		if got := Preview(cfg); got != first {
+			t.Fatalf("Preview() nondeterministic across renders (run %d):\n--- first ---\n%s\n--- got ---\n%s", i, first, got)
+		}
+	}
+	if strings.Index(first, "alpha") > strings.Index(first, "beta") || strings.Index(first, "beta") > strings.Index(first, "gamma") {
+		t.Errorf("profiles not rendered in sorted order:\n%s", first)
+	}
+}
