@@ -10,6 +10,7 @@ import (
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/fsutil"
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"github.com/spf13/cobra"
 )
 
@@ -251,7 +252,10 @@ func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 				break
 			}
 		}
-		dest, pattern := promptInjectTarget(name, in, out)
+		dest, pattern, promptErr := promptInjectTarget(name, in, out)
+		if promptErr != nil {
+			return fmt.Errorf("add secret: %w", promptErr)
+		}
 		inject := map[string]string{}
 		if dest != "" && pattern != "" {
 			inject[dest] = pattern
@@ -274,7 +278,10 @@ func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 	// Prompt for an injection target so the written config passes validate().
 	// An empty inject map bricks every other nestor command because Load()
 	// runs validate() on every invocation.
-	dest, pattern := promptInjectTarget(name, in, out)
+	dest, pattern, promptErr := promptInjectTarget(name, in, out)
+	if promptErr != nil {
+		return fmt.Errorf("add secret: %w", promptErr)
+	}
 
 	inject := map[string]string{}
 	if dest != "" && pattern != "" {
@@ -298,30 +305,50 @@ func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 	return nil
 }
 
+// promptInjectHome resolves the current user's home directory for inject
+// target validation, returning "" when the lookup fails — the same contract
+// restore.userHome uses. Tests override it to pin the HOME-unavailable path.
+var promptInjectHome = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
 // promptInjectTarget asks the user for a dest path and template pattern for
 // the new secret. Both are optional — an empty line skips the target. The
 // pattern defaults to "key: {{.<name>}}" (matching the PLAN.md example form)
-// when only a dest is given.
-func promptInjectTarget(name string, in io.Reader, out io.Writer) (dest, pattern string) {
+// when only a dest is given. The dest is validated with the same rule the
+// injector applies at deploy time (pathutil.ResolveHome): a tilde form the
+// injector will refuse forever — "~root/...", or any "~" path when the home
+// lookup fails — is refused here with an error, so the add aborts instead of
+// fossilizing a target in nestor.yml that bricks every subsequent
+// 'nestor up'. An empty dest WITHOUT an error is an explicit skip.
+func promptInjectTarget(name string, in io.Reader, out io.Writer) (dest, pattern string, err error) {
 	scanner := bufio.NewScanner(in)
 	fmt.Fprintf(out, "inject into which file? (path, or blank to skip): ")
 	if !scanner.Scan() {
-		return "", ""
+		return "", "", nil
 	}
 	dest = strings.TrimSpace(scanner.Text())
 	if dest == "" {
-		return "", ""
+		return "", "", nil
+	}
+	if _, resolveErr := pathutil.ResolveHome(dest, promptInjectHome()); resolveErr != nil {
+		fmt.Fprintf(out, "nestor: refusing inject target %s: %v\n", dest, resolveErr)
+		return "", "", fmt.Errorf("invalid inject target %q: %w", dest, resolveErr)
 	}
 	defaultPattern := fmt.Sprintf("%s: {{.%s}}", name, name)
 	fmt.Fprintf(out, "template pattern for %s (default %q): ", dest, defaultPattern)
 	if !scanner.Scan() {
-		return dest, defaultPattern
+		return dest, defaultPattern, nil
 	}
 	pattern = strings.TrimSpace(scanner.Text())
 	if pattern == "" {
 		pattern = defaultPattern
 	}
-	return dest, pattern
+	return dest, pattern, nil
 }
 
 // writeConfig writes the config back to disk preserving YAML formatting.

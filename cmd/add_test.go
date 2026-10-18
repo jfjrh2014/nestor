@@ -327,7 +327,10 @@ func TestPromptInjectTarget(t *testing.T) {
 	t.Run("both provided", func(t *testing.T) {
 		input := "~/.bashrc\nFOO={{.foo}}\n"
 		var out bytes.Buffer
-		dest, pattern := promptInjectTarget("foo", strings.NewReader(input), &out)
+		dest, pattern, err := promptInjectTarget("foo", strings.NewReader(input), &out)
+		if err != nil {
+			t.Fatalf("promptInjectTarget: %v", err)
+		}
 		if dest != "~/.bashrc" {
 			t.Errorf("dest = %q, want ~/.bashrc", dest)
 		}
@@ -340,7 +343,10 @@ func TestPromptInjectTarget(t *testing.T) {
 	t.Run("default pattern", func(t *testing.T) {
 		input := "~/.env\n\n"
 		var out bytes.Buffer
-		dest, pattern := promptInjectTarget("api_key", strings.NewReader(input), &out)
+		dest, pattern, err := promptInjectTarget("api_key", strings.NewReader(input), &out)
+		if err != nil {
+			t.Fatalf("promptInjectTarget: %v", err)
+		}
 		if dest != "~/.env" {
 			t.Errorf("dest = %q, want ~/.env", dest)
 		}
@@ -354,7 +360,10 @@ func TestPromptInjectTarget(t *testing.T) {
 	t.Run("skip", func(t *testing.T) {
 		input := "\n"
 		var out bytes.Buffer
-		dest, pattern := promptInjectTarget("foo", strings.NewReader(input), &out)
+		dest, pattern, err := promptInjectTarget("foo", strings.NewReader(input), &out)
+		if err != nil {
+			t.Fatalf("promptInjectTarget: %v", err)
+		}
 		if dest != "" || pattern != "" {
 			t.Errorf("expected empty dest+pattern, got %q/%q", dest, pattern)
 		}
@@ -769,4 +778,119 @@ func TestAddDotfileRefusesOtherUserTilde(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(dir, "dotfiles", ".bashrc.tmpl")); statErr == nil {
 		t.Error("template materialized from the wrong (re-rooted) path")
 	}
+}
+
+// TestPromptInjectTargetRefusesForeignTilde pins the session #110 contract:
+// an inject dest the injector will refuse forever (~user/... form) must be
+// refused at add time — the old code fossilized it in nestor.yml, and every
+// later 'nestor up' failed on it (InjectAll refuses it at deploy time; probed
+// before the fix). The refused prompt yields the empty dest/pattern the
+// callers already treat as "skipped", so nothing is written.
+func TestPromptInjectTargetRefusesForeignTilde(t *testing.T) {
+	input := "~root/.bashrc\nAPI={{.api_key}}\n"
+	var out bytes.Buffer
+	dest, pattern, perr := promptInjectTarget("api_key", strings.NewReader(input), &out)
+	if perr == nil {
+		t.Fatal("expected refusal error for ~user/... dest, got nil")
+	}
+	if dest != "" || pattern != "" {
+		t.Fatalf("expected refused dest/pattern to be empty, got %q/%q", dest, pattern)
+	}
+	if !strings.Contains(out.String(), "refusing inject target") {
+		t.Errorf("expected refusal message, got: %s", out.String())
+	}
+}
+
+// TestAddSecretForeignTildeTargetNotRecorded pins the end-to-end damage
+// contract: with the trap of a decoy file at $HOME/root/.bashrc (which made
+// the old re-rooting bug invisible), 'nestor add secret' with a ~user/...
+// dest must leave nestor.yml byte-for-byte unchanged and still loadable.
+func TestAddSecretForeignTildeTargetNotRecorded(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	t.Setenv("HOME", dir)
+	// Decoy: the old re-rooted Stat succeeded against $HOME/root/.bashrc.
+	if err := os.MkdirAll(filepath.Join(dir, "root"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "root", ".bashrc"), []byte("decoy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	before, _ := os.ReadFile(cfgPath)
+	input := "~root/.bashrc\nAPI={{.api_key}}\n"
+	var out bytes.Buffer
+	// The refusal is a loud abort: addSecret returns the error so the shell
+	// shows it, and nothing reaches nestor.yml.
+	err := addSecret("api_key", "", strings.NewReader(input), &out)
+	if err == nil {
+		t.Fatal("addSecret: expected refusal error for ~user/... inject target, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid inject target") {
+		t.Errorf("addSecret error = %v, want an invalid inject target refusal", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config was modified despite refused inject target")
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("config no longer loads after refused add: %v", err)
+	}
+	if strings.Contains(out.String(), "added secret") {
+		t.Errorf("add reported success despite refused target: %s", out.String())
+	}
+}
+
+// TestPromptInjectTargetRefusesTildeWhenHomeUnavailable: with the home
+// lookup failing, the injector refuses any tilde dest (ResolveHome) — add
+// must apply the same rule instead of recording a target that bricks 'up'.
+func TestPromptInjectTargetRefusesTildeWhenHomeUnavailable(t *testing.T) {
+	orig := promptInjectHome
+	promptInjectHome = func() string { return "" }
+	defer func() { promptInjectHome = orig }()
+
+	input := "~/.bashrc\nAPI={{.api_key}}\n"
+	var out bytes.Buffer
+	dest, pattern, perr := promptInjectTarget("api_key", strings.NewReader(input), &out)
+	if perr == nil {
+		t.Fatal("expected refusal error when home is unavailable, got nil")
+	}
+	if dest != "" || pattern != "" {
+		t.Fatalf("expected refused dest/pattern to be empty, got %q/%q", dest, pattern)
+	}
+	if !strings.Contains(out.String(), "home directory is unavailable") {
+		t.Errorf("expected home-unavailable refusal, got: %s", out.String())
+	}
+}
+
+// TestPromptInjectTargetAcceptsPlainAndTildePaths pins the untouched paths:
+// plain and ~/... dests still pass validation (the guard must key on the
+// defect, not reject the common shapes).
+func TestPromptInjectTargetAcceptsPlainAndTildePaths(t *testing.T) {
+	t.Run("tilde own home", func(t *testing.T) {
+		orig := promptInjectHome
+		promptInjectHome = func() string { return "/home/tester" }
+		defer func() { promptInjectHome = orig }()
+		var out bytes.Buffer
+		dest, pattern, perr := promptInjectTarget("k", strings.NewReader("~/.bashrc\n\n"), &out)
+		if perr != nil {
+			t.Fatalf("promptInjectTarget: %v", perr)
+		}
+		if dest != "~/.bashrc" || pattern != "k: {{.k}}" {
+			t.Fatalf("dest/pattern = %q/%q, want ~/.bashrc + default pattern", dest, pattern)
+		}
+	})
+	t.Run("plain absolute", func(t *testing.T) {
+		var out bytes.Buffer
+		dest, _, perr := promptInjectTarget("k", strings.NewReader("/etc/motd\n\n"), &out)
+		if perr != nil {
+			t.Fatalf("promptInjectTarget: %v", perr)
+		}
+		if dest != "/etc/motd" {
+			t.Fatalf("dest = %q, want /etc/motd", dest)
+		}
+	})
 }
