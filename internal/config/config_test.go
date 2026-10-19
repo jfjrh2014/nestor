@@ -549,3 +549,118 @@ func TestDefaultDotfilesSource(t *testing.T) {
 		t.Fatalf("default source %q is not absolute", got)
 	}
 }
+
+// TestValidateRejectsSelfInjectTarget: injecting a secret INTO nestor.yml
+// rewrites the config with a rendered key: value line and bricks the next
+// Load. The mapping must be refused at validation, not discovered on the
+// first 'nestor up'.
+func TestValidateRejectsSelfInjectTarget(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &Config{
+		Version: 1,
+		Dotfiles: Dotfiles{
+			Strategy:  "copy",
+			Templates: []Template{},
+		},
+		Secrets: Secrets{
+			Provider: "env",
+			Mappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.config/nestor/nestor.yml": "tok: {{.tok}}"}}},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for self-inject target, got nil")
+	}
+	if !strings.Contains(err.Error(), "nestor's own config file") {
+		t.Errorf("error should name the config file, got: %v", err)
+	}
+}
+
+// TestValidateAcceptsSelfInjectLookalike pins the untouched path: a lookalike
+// path (.yaml extension, sibling name) is not the config file and stays legal.
+func TestValidateAcceptsSelfInjectLookalike(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &Config{
+		Version: 1,
+		Secrets: Secrets{
+			Provider: "env",
+			Mappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.config/nestor/nestor.yaml": "tok: {{.tok}}"}}},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("lookalike path should pass, got: %v", err)
+	}
+}
+
+// TestValidateRejectsManagedDotfileInjectTarget: templates render with no
+// secret data, so a secret injected into a managed dotfile is overwritten by
+// the next deploy. The mapping is refused.
+func TestValidateRejectsManagedDotfileInjectTarget(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &Config{
+		Version: 1,
+		Dotfiles: Dotfiles{
+			Strategy:  "copy",
+			Templates: []Template{{Src: "bashrc.tmpl", Dest: "~/.bashrc"}},
+		},
+		Secrets: Secrets{
+			Provider: "env",
+			Mappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.bashrc": "tok: {{.tok}}"}}},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for managed-dotfile inject target, got nil")
+	}
+	if !strings.Contains(err.Error(), "managed dotfile") {
+		t.Errorf("error should name the dotfile collision, got: %v", err)
+	}
+}
+
+// TestValidateAllowsUnmanagedInjectTarget pins the untouched path: the same
+// dest with no managed template pointing at it is still legal.
+func TestValidateAllowsUnmanagedInjectTarget(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &Config{
+		Version: 1,
+		Dotfiles: Dotfiles{
+			Strategy:  "copy",
+			Templates: []Template{{Src: "zsh.tmpl", Dest: "~/.zshrc"}},
+		},
+		Secrets: Secrets{
+			Provider: "env",
+			Mappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.bashrc": "tok: {{.tok}}"}}},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unmanaged dest should pass, got: %v", err)
+	}
+}
+
+// TestValidateRejectsProfileManagedDotfileInjectTarget: a profile secret
+// mapping whose dest collides with the profile's own dotfile is refused too.
+func TestValidateRejectsProfileManagedDotfileInjectTarget(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &Config{
+		Version: 1,
+		Secrets: Secrets{Provider: "env"},
+		Profiles: map[string]Profile{
+			"work": {
+				Dotfiles:       []Template{{Src: "bashrc.tmpl", Dest: "~/.bashrc"}},
+				SecretMappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.bashrc": "tok: {{.tok}}"}}},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for profile self-colliding inject target, got nil")
+	}
+	if !strings.Contains(err.Error(), "managed dotfile") {
+		t.Errorf("error should name the dotfile collision, got: %v", err)
+	}
+}

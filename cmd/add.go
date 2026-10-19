@@ -339,6 +339,28 @@ func promptInjectTarget(name string, in io.Reader, out io.Writer) (dest, pattern
 		fmt.Fprintf(out, "nestor: refusing inject target %s: %v\n", dest, resolveErr)
 		return "", "", fmt.Errorf("invalid inject target %q: %w", dest, resolveErr)
 	}
+	// Same reason as session #112's tilde rule: a dest that corrupts on every
+	// 'up' must be refused here instead of fossilized in nestor.yml. Nestor's
+	// own config file is exactly that: injecting into nestor.yml rewrites the
+	// config with a rendered secret line and bricks the next load.
+	if pathutil.IsSelfInject(dest, promptInjectHome()) {
+		fmt.Fprintf(out, "nestor: refusing inject target %s: it is nestor's own config file\n", dest)
+		return "", "", fmt.Errorf("invalid inject target %q: injecting into nestor's config file is not allowed", dest)
+	}
+	// The default XDG location is not the only shape of "the config file":
+	// with --config the live config is wherever configPath points, and the
+	// same corruption applies. Compare expanded and absolute forms so a
+	// relative dest typed at the prompt still collides.
+	if live := configPath(); live != "" {
+		expanded := pathutil.ExpandHome(dest, promptInjectHome())
+		if absDest, absErr := filepath.Abs(dest); absErr == nil {
+			expanded = expanded + "\x00" + absDest
+		}
+		if strings.Contains("\x00"+expanded+"\x00", "\x00"+live+"\x00") {
+			fmt.Fprintf(out, "nestor: refusing inject target %s: it is this nestor's live config file (--config)\n", dest)
+			return "", "", fmt.Errorf("invalid inject target %q: injecting into nestor's config file is not allowed", dest)
+		}
+	}
 	defaultPattern := fmt.Sprintf("%s: {{.%s}}", name, name)
 	fmt.Fprintf(out, "template pattern for %s (default %q): ", dest, defaultPattern)
 	if !scanner.Scan() {

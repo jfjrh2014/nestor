@@ -169,6 +169,9 @@ func (c *Config) validate() error {
 	if c.Dotfiles.Strategy == "" {
 		c.Dotfiles.Strategy = "copy"
 	}
+
+	// Self-inject guard needs the real home to resolve "~" forms against.
+	home, _ := os.UserHomeDir()
 	if c.Dotfiles.Strategy != "copy" && c.Dotfiles.Strategy != "symlink" {
 		return fmt.Errorf("dotfiles.strategy must be 'copy' or 'symlink', got %q", c.Dotfiles.Strategy)
 	}
@@ -215,6 +218,12 @@ func (c *Config) validate() error {
 			if pathutil.IsOtherUserTilde(dest) {
 				return fmt.Errorf("secrets.mappings[%d]: inject target %q uses the ~user/... form, which nestor does not expand (it would inject into your own home)", i, dest)
 			}
+			if pathutil.IsSelfInject(dest, home) {
+				return fmt.Errorf("secrets.mappings[%d]: inject target %q is nestor's own config file — injecting there corrupts nestor.yml on every 'nestor up'", i, dest)
+			}
+			if pathutil.IsManagedDotfileDest(dest, templateDests(c.Dotfiles.Templates), home) {
+				return fmt.Errorf("secrets.mappings[%d]: inject target %q is a managed dotfile destination — deploying it overwrites the injected value", i, dest)
+			}
 		}
 	}
 
@@ -247,11 +256,30 @@ func (c *Config) validate() error {
 				if pathutil.IsOtherUserTilde(dest) {
 					return fmt.Errorf("profiles.%s.secrets[%d]: inject target %q uses the ~user/... form, which nestor does not expand (it would inject into your own home)", name, i, dest)
 				}
+				if pathutil.IsSelfInject(dest, home) {
+					return fmt.Errorf("profiles.%s.secrets[%d]: inject target %q is nestor's own config file — injecting there corrupts nestor.yml on every 'nestor up'", name, i, dest)
+				}
+				if pathutil.IsManagedDotfileDest(dest, templateDests(prof.Dotfiles), home) {
+					return fmt.Errorf("profiles.%s.secrets[%d]: inject target %q is a managed dotfile destination — deploying it overwrites the injected value", name, i, dest)
+				}
+				if pathutil.IsManagedDotfileDest(dest, templateDests(c.Dotfiles.Templates), home) {
+					return fmt.Errorf("profiles.%s.secrets[%d]: inject target %q is a base dotfile destination — deploying it overwrites the injected value", name, i, dest)
+				}
 			}
 		}
 	}
 
 	return nil
+}
+
+// templateDests extracts the destinations of a template list for
+// pathutil.IsManagedDotfileDest comparisons.
+func templateDests(templates []Template) []string {
+	dests := make([]string, len(templates))
+	for i, t := range templates {
+		dests[i] = t.Dest
+	}
+	return dests
 }
 
 // Marshal serializes the config back to YAML bytes.

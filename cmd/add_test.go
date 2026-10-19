@@ -894,3 +894,57 @@ func TestPromptInjectTargetAcceptsPlainAndTildePaths(t *testing.T) {
 		}
 	})
 }
+
+// TestPromptInjectTargetRefusesSelfInject: nestor's own config file is not a
+// legal inject target — injecting into nestor.yml rewrites the config with a
+// rendered secret line and bricks the next load. Refuse at add time, same
+// contract as the #112 tilde rule.
+func TestPromptInjectTargetRefusesSelfInject(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	input := "~/.config/nestor/nestor.yml\nTOK={{.tok}}\n"
+	var out bytes.Buffer
+	dest, pattern, perr := promptInjectTarget("tok", strings.NewReader(input), &out)
+	if perr == nil {
+		t.Fatal("expected refusal error for self-inject dest, got nil")
+	}
+	if dest != "" || pattern != "" {
+		t.Fatalf("expected refused dest/pattern to be empty, got %q/%q", dest, pattern)
+	}
+	if !strings.Contains(out.String(), "nestor's own config file") {
+		t.Errorf("expected config-file refusal message, got: %s", out.String())
+	}
+}
+
+// TestAddSecretSelfInjectTargetNotRecorded pins the end-to-end damage
+// contract: 'nestor add secret' with nestor.yml itself as the dest must
+// abort loudly and leave nestor.yml byte-for-byte unchanged and loadable.
+func TestAddSecretSelfInjectTargetNotRecorded(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	t.Setenv("HOME", dir)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	before, _ := os.ReadFile(cfgPath)
+	input := cfgPath + "\nTOK={{.tok}}\n"
+	var out bytes.Buffer
+	err := addSecret("tok", "", strings.NewReader(input), &out)
+	if err == nil {
+		t.Fatal("addSecret: expected refusal error for self-inject target, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid inject target") {
+		t.Errorf("addSecret error = %v, want an invalid inject target refusal", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("nestor.yml was modified despite refused self-inject target")
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("config no longer loads after refused add: %v", err)
+	}
+	if strings.Contains(out.String(), "added secret") {
+		t.Errorf("add reported success despite refused target: %s", out.String())
+	}
+}

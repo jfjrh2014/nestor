@@ -195,6 +195,15 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("dest %q is a symlink; remove it before injecting", dest)}
 	}
 
+	// Never inject into nestor's own config file: the append/rewrite paths
+	// below would leave a rendered "key: value" line in nestor.yml, and the
+	// next Load would brick every command. Config validation refuses this
+	// mapping too; the guard here also covers configs written by hand or by
+	// an older nestor that never validated. ConfigPathFn is a test seam.
+	if pathutil.IsSelfInject(dest, currentHome()) && dest == configPathFn() {
+		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("dest %q is nestor's own config file; refusing to inject into it", dest)}
+	}
+
 	// Create dest dir if needed.
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("mkdir: %w", err)}
@@ -293,6 +302,14 @@ func replaceAnchoredLine(content, anchor, newLine string) (string, bool) {
 
 func expandHome(p string) string {
 	return pathutil.ExpandHome(p, currentHome())
+}
+
+// configPathFn returns the path of nestor's own config file for the
+// self-inject guard. Seam: tests override it; nil restores the default
+// XDG location.
+var configPathFn = func() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "nestor", "nestor.yml")
 }
 
 // currentHome returns the current user's home, or "" when the lookup fails.

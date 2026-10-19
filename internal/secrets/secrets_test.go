@@ -848,3 +848,82 @@ func TestInjectOneRefusesTildeDestWhenHomeUnavailable(t *testing.T) {
 		t.Errorf("plain dest missing after inject: %v", err)
 	}
 }
+
+// TestInjectOneRefusesSelfInjectDest: the engine guard covers configs written
+// by hand or by an older nestor that never validated — the append path would
+// leave a rendered "key: value" line in nestor.yml and brick the next Load.
+func TestInjectOneRefusesSelfInjectDest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfgPath := filepath.Join(dir, ".config", "nestor", "nestor.yml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := configPathFn
+	configPathFn = func() string { return cfgPath }
+	defer func() { configPathFn = orig }()
+
+	r := injectOne("tok", "s3cret", cfgPath, "tok: {{.Key}}")
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for self-inject dest, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "own config file") {
+		t.Fatalf("expected config-file refusal error, got %v", r.Err)
+	}
+	got, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "version: 1\n" {
+		t.Fatalf("nestor.yml was modified: %q", got)
+	}
+}
+
+// TestInjectOneRefusesTildeSelfInjectDest: the tilde form resolves to the
+// same file and must be caught by the same guard.
+func TestInjectOneRefusesTildeSelfInjectDest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfgPath := filepath.Join(dir, ".config", "nestor", "nestor.yml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := configPathFn
+	configPathFn = func() string { return cfgPath }
+	defer func() { configPathFn = orig }()
+
+	r := injectOne("tok", "s3cret", "~/.config/nestor/nestor.yml", "tok: {{.Key}}")
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for tilde self-inject dest, got %s", r.Status)
+	}
+	got, _ := os.ReadFile(cfgPath)
+	if string(got) != "version: 1\n" {
+		t.Fatalf("nestor.yml was modified: %q", got)
+	}
+}
+
+// TestInjectOneAllowsSameShapedRegularFile pins the untouched path: a regular
+// file that merely sits beside nestor.yml (lookalike name) still injects —
+// the guard must key on the real config path, not on the file shape.
+func TestInjectOneAllowsSameShapedRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	orig := configPathFn
+	configPathFn = func() string { return filepath.Join(dir, ".config", "nestor", "nestor.yml") }
+	defer func() { configPathFn = orig }()
+
+	dest := filepath.Join(dir, "creds.conf")
+	r := injectOne("tok", "s3cret", dest, "tok: {{.Key}}")
+
+	if r.Status != StatusInjected {
+		t.Fatalf("expected StatusInjected for lookalike path, got %s (%v)", r.Status, r.Err)
+	}
+}

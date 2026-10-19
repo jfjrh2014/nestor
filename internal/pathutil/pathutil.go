@@ -42,6 +42,42 @@ func IsOtherUserTilde(path string) bool {
 	return true
 }
 
+// IsSelfInject reports whether path points at nestor's own config file
+// (nestor.yml) once resolved against home. Injecting a secret INTO the
+// config is corruption by definition: every injection rewrites nestor.yml
+// with a rendered "key: value" line that the YAML has no schema for, and
+// the next config load bricks every nestor command. Tilde and plain forms
+// are compared in their expanded shape, so "~/.config/nestor/nestor.yml"
+// and the absolute path are caught alike. Shared by config validation,
+// 'nestor add' prompting, and the inject engine (defense in depth).
+func IsSelfInject(path, home string) bool {
+	if path == "" {
+		return false
+	}
+	expanded := ExpandHome(path, home)
+	target := filepath.Join(home, ".config", "nestor", "nestor.yml")
+	return expanded == target
+}
+
+// IsManagedDotfileDest reports whether path equals one of the given
+// dotfile destinations, comparing in the expanded shape so "~/.bashrc" and
+// the absolute path collide. A secret injected INTO a managed dotfile never
+// survives: templates render with no secret data, so the next deploy
+// overwrites the injected value silently. Used by config validation to
+// refuse the mapping at load time.
+func IsManagedDotfileDest(path string, dests []string, home string) bool {
+	if path == "" || len(dests) == 0 {
+		return false
+	}
+	expanded := ExpandHome(path, home)
+	for _, d := range dests {
+		if ExpandHome(d, home) == expanded {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveHome expands a leading "~" or "~/..." against home and rejects the
 // "~user/..." form. When home is empty (the lookup failed) any tilde form is
 // refused instead of passing through: a dest like "~/.bashrc" written
