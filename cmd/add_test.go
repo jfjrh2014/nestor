@@ -327,7 +327,7 @@ func TestPromptInjectTarget(t *testing.T) {
 	t.Run("both provided", func(t *testing.T) {
 		input := "~/.bashrc\nFOO={{.foo}}\n"
 		var out bytes.Buffer
-		dest, pattern, err := promptInjectTarget("foo", strings.NewReader(input), &out)
+		dest, pattern, err := promptInjectTarget("foo", nil, strings.NewReader(input), &out)
 		if err != nil {
 			t.Fatalf("promptInjectTarget: %v", err)
 		}
@@ -343,7 +343,7 @@ func TestPromptInjectTarget(t *testing.T) {
 	t.Run("default pattern", func(t *testing.T) {
 		input := "~/.env\n\n"
 		var out bytes.Buffer
-		dest, pattern, err := promptInjectTarget("api_key", strings.NewReader(input), &out)
+		dest, pattern, err := promptInjectTarget("api_key", nil, strings.NewReader(input), &out)
 		if err != nil {
 			t.Fatalf("promptInjectTarget: %v", err)
 		}
@@ -360,7 +360,7 @@ func TestPromptInjectTarget(t *testing.T) {
 	t.Run("skip", func(t *testing.T) {
 		input := "\n"
 		var out bytes.Buffer
-		dest, pattern, err := promptInjectTarget("foo", strings.NewReader(input), &out)
+		dest, pattern, err := promptInjectTarget("foo", nil, strings.NewReader(input), &out)
 		if err != nil {
 			t.Fatalf("promptInjectTarget: %v", err)
 		}
@@ -789,7 +789,7 @@ func TestAddDotfileRefusesOtherUserTilde(t *testing.T) {
 func TestPromptInjectTargetRefusesForeignTilde(t *testing.T) {
 	input := "~root/.bashrc\nAPI={{.api_key}}\n"
 	var out bytes.Buffer
-	dest, pattern, perr := promptInjectTarget("api_key", strings.NewReader(input), &out)
+	dest, pattern, perr := promptInjectTarget("api_key", nil, strings.NewReader(input), &out)
 	if perr == nil {
 		t.Fatal("expected refusal error for ~user/... dest, got nil")
 	}
@@ -854,7 +854,7 @@ func TestPromptInjectTargetRefusesTildeWhenHomeUnavailable(t *testing.T) {
 
 	input := "~/.bashrc\nAPI={{.api_key}}\n"
 	var out bytes.Buffer
-	dest, pattern, perr := promptInjectTarget("api_key", strings.NewReader(input), &out)
+	dest, pattern, perr := promptInjectTarget("api_key", nil, strings.NewReader(input), &out)
 	if perr == nil {
 		t.Fatal("expected refusal error when home is unavailable, got nil")
 	}
@@ -875,7 +875,7 @@ func TestPromptInjectTargetAcceptsPlainAndTildePaths(t *testing.T) {
 		promptInjectHome = func() string { return "/home/tester" }
 		defer func() { promptInjectHome = orig }()
 		var out bytes.Buffer
-		dest, pattern, perr := promptInjectTarget("k", strings.NewReader("~/.bashrc\n\n"), &out)
+		dest, pattern, perr := promptInjectTarget("k", nil, strings.NewReader("~/.bashrc\n\n"), &out)
 		if perr != nil {
 			t.Fatalf("promptInjectTarget: %v", perr)
 		}
@@ -885,7 +885,7 @@ func TestPromptInjectTargetAcceptsPlainAndTildePaths(t *testing.T) {
 	})
 	t.Run("plain absolute", func(t *testing.T) {
 		var out bytes.Buffer
-		dest, _, perr := promptInjectTarget("k", strings.NewReader("/etc/motd\n\n"), &out)
+		dest, _, perr := promptInjectTarget("k", nil, strings.NewReader("/etc/motd\n\n"), &out)
 		if perr != nil {
 			t.Fatalf("promptInjectTarget: %v", perr)
 		}
@@ -904,7 +904,7 @@ func TestPromptInjectTargetRefusesSelfInject(t *testing.T) {
 	t.Setenv("HOME", dir)
 	input := "~/.config/nestor/nestor.yml\nTOK={{.tok}}\n"
 	var out bytes.Buffer
-	dest, pattern, perr := promptInjectTarget("tok", strings.NewReader(input), &out)
+	dest, pattern, perr := promptInjectTarget("tok", nil, strings.NewReader(input), &out)
 	if perr == nil {
 		t.Fatal("expected refusal error for self-inject dest, got nil")
 	}
@@ -946,5 +946,122 @@ func TestAddSecretSelfInjectTargetNotRecorded(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "added secret") {
 		t.Errorf("add reported success despite refused target: %s", out.String())
+	}
+}
+
+// TestPromptInjectTargetRefusesManagedDotfileDest pins session #113's inject
+// side: a dest a managed dotfile deploys over is refused at the prompt instead
+// of fossilized in nestor.yml (the next deploy silently overwrites the value).
+func TestPromptInjectTargetRefusesManagedDotfileDest(t *testing.T) {
+	orig := promptInjectHome
+	promptInjectHome = func() string { return "/home/tester" }
+	defer func() { promptInjectHome = orig }()
+
+	var out bytes.Buffer
+	dest, pattern, perr := promptInjectTarget("tok", []string{"~/.bashrc"}, strings.NewReader("~/.bashrc\nTOK={{.tok}}\n"), &out)
+	if perr == nil {
+		t.Fatal("expected refusal error for managed-dotfile dest, got nil")
+	}
+	if dest != "" || pattern != "" {
+		t.Fatalf("expected refused dest/pattern to be empty, got %q/%q", dest, pattern)
+	}
+	if !strings.Contains(out.String(), "managed dotfile destination") {
+		t.Errorf("expected managed-dotfile refusal message, got: %s", out.String())
+	}
+}
+
+// TestPromptInjectTargetDisjointDotfileDests pins the untouched path: a dest
+// no managed template points at still passes (the guard must key on the
+// collision, not reject everything).
+func TestPromptInjectTargetDisjointDotfileDests(t *testing.T) {
+	orig := promptInjectHome
+	promptInjectHome = func() string { return "/home/tester" }
+	defer func() { promptInjectHome = orig }()
+
+	var out bytes.Buffer
+	dest, _, perr := promptInjectTarget("tok", []string{"~/.bashrc", "~/.gitconfig"}, strings.NewReader("~/.zshrc\n\n"), &out)
+	if perr != nil {
+		t.Fatalf("promptInjectTarget: %v", perr)
+	}
+	if dest != "~/.zshrc" {
+		t.Fatalf("dest = %q, want ~/.zshrc", dest)
+	}
+}
+
+// TestAddDotfileRefusesInjectTargetDest pins session #113's dotfile side:
+// 'nestor add dotfile' on a path a secret injects into must abort loudly,
+// leave nestor.yml byte-for-byte unchanged, and NOT materialize the template.
+func TestAddDotfileRefusesInjectTargetDest(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	content := `version: 1
+packages:
+  common: []
+dotfiles:
+  source: %s
+  strategy: copy
+  templates: []
+secrets:
+  provider: env
+  mappings:
+    - key: app_token
+      inject:
+        "%s": "token: {{.app_token}}"
+shells:
+  default: bash
+`
+	sourceDir := filepath.Join(dir, "dotfiles")
+	body := fmt.Sprintf(content, sourceDir, "~/.config/app/conf")
+	os.WriteFile(cfgPath, []byte(body), 0o644)
+
+	// The source exists — it is the injected file itself, which is exactly
+	// the mistake this guard catches.
+	target := filepath.Join(dir, ".config", "app", "conf")
+	os.MkdirAll(filepath.Dir(target), 0o755)
+	os.WriteFile(target, []byte("token: secret\n"), 0o644)
+
+	t.Setenv("HOME", dir)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	before, _ := os.ReadFile(cfgPath)
+	var out bytes.Buffer
+	if err := addDotfile(target, "", &out); err == nil {
+		t.Fatal("addDotfile: expected refusal for inject-target dest, got nil")
+	} else if !strings.Contains(err.Error(), "declared secret inject target") {
+		t.Errorf("error = %v, want inject-target refusal", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config was modified despite refused dotfile dest")
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("config no longer loads after refused add: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sourceDir, "conf.tmpl")); !os.IsNotExist(err) {
+		t.Error("template materialized despite refused dest")
+	}
+}
+
+// TestAddDotfileRefusesSelfConfigDest: a dotfile whose dest is nestor's own
+// config would have every deploy rewrite the config that drives it.
+func TestAddDotfileRefusesSelfConfigDest(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	t.Setenv("HOME", dir)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	before, _ := os.ReadFile(cfgPath)
+	var out bytes.Buffer
+	if err := addDotfile(cfgPath, "", &out); err == nil {
+		t.Fatal("addDotfile: expected refusal for self-config dest, got nil")
+	} else if !strings.Contains(err.Error(), "nestor's own config file") {
+		t.Errorf("error = %v, want config-file refusal", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config was modified despite refused dotfile dest")
 	}
 }

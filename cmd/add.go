@@ -151,6 +151,19 @@ func addDotfile(name, profileName string, out io.Writer) error {
 		return fmt.Errorf("add dotfile: source %s not found: %v", absPath, err)
 	}
 
+	// Session #113: a dest that is a declared secret inject target would have
+	// every deploy silently overwrite the injected value, and a dest of
+	// nestor's own config would rewrite the config that drives it. Refuse
+	// here (before the template is materialized) instead of fossilizing a
+	// mapping in nestor.yml that bricks the next load.
+	home, _ = os.UserHomeDir()
+	if isLiveConfigPath(name, home) {
+		return fmt.Errorf("add dotfile: dest %s is nestor's own config file — every deploy would rewrite the config that drives it", name)
+	}
+	if pathutil.IsManagedDotfileDest(name, cfg.InjectTargetDests(), home) {
+		return fmt.Errorf("add dotfile: dest %s is a declared secret inject target — deploying the template overwrites the injected value", name)
+	}
+
 	// Figure out filename for src
 	base := filepath.Base(absPath)
 	srcName := base + ".tmpl"
@@ -252,7 +265,7 @@ func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 				break
 			}
 		}
-		dest, pattern, promptErr := promptInjectTarget(name, in, out)
+		dest, pattern, promptErr := promptInjectTarget(name, cfg.TemplateDests(), in, out)
 		if promptErr != nil {
 			return fmt.Errorf("add secret: %w", promptErr)
 		}
@@ -278,7 +291,7 @@ func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 	// Prompt for an injection target so the written config passes validate().
 	// An empty inject map bricks every other nestor command because Load()
 	// runs validate() on every invocation.
-	dest, pattern, promptErr := promptInjectTarget(name, in, out)
+	dest, pattern, promptErr := promptInjectTarget(name, cfg.TemplateDests(), in, out)
 	if promptErr != nil {
 		return fmt.Errorf("add secret: %w", promptErr)
 	}
@@ -324,8 +337,12 @@ var promptInjectHome = func() string {
 // injector will refuse forever — "~root/...", or any "~" path when the home
 // lookup fails — is refused here with an error, so the add aborts instead of
 // fossilizing a target in nestor.yml that bricks every subsequent
-// 'nestor up'. An empty dest WITHOUT an error is an explicit skip.
-func promptInjectTarget(name string, in io.Reader, out io.Writer) (dest, pattern string, err error) {
+// 'nestor up'. A dest that a managed dotfile deploys over is refused for the
+// same reason (session #113): the next deploy would silently overwrite the
+// injected value. dotfileDests is cfg.TemplateDests() — every template dest
+// across base and profile layers. An empty dest WITHOUT an error is an
+// explicit skip.
+func promptInjectTarget(name string, dotfileDests []string, in io.Reader, out io.Writer) (dest, pattern string, err error) {
 	scanner := bufio.NewScanner(in)
 	fmt.Fprintf(out, "inject into which file? (path, or blank to skip): ")
 	if !scanner.Scan() {
@@ -343,23 +360,17 @@ func promptInjectTarget(name string, in io.Reader, out io.Writer) (dest, pattern
 	// 'up' must be refused here instead of fossilized in nestor.yml. Nestor's
 	// own config file is exactly that: injecting into nestor.yml rewrites the
 	// config with a rendered secret line and bricks the next load.
-	if pathutil.IsSelfInject(dest, promptInjectHome()) {
+	if isLiveConfigPath(dest, promptInjectHome()) {
 		fmt.Fprintf(out, "nestor: refusing inject target %s: it is nestor's own config file\n", dest)
 		return "", "", fmt.Errorf("invalid inject target %q: injecting into nestor's config file is not allowed", dest)
 	}
-	// The default XDG location is not the only shape of "the config file":
-	// with --config the live config is wherever configPath points, and the
-	// same corruption applies. Compare expanded and absolute forms so a
-	// relative dest typed at the prompt still collides.
-	if live := configPath(); live != "" {
-		expanded := pathutil.ExpandHome(dest, promptInjectHome())
-		if absDest, absErr := filepath.Abs(dest); absErr == nil {
-			expanded = expanded + "\x00" + absDest
-		}
-		if strings.Contains("\x00"+expanded+"\x00", "\x00"+live+"\x00") {
-			fmt.Fprintf(out, "nestor: refusing inject target %s: it is this nestor's live config file (--config)\n", dest)
-			return "", "", fmt.Errorf("invalid inject target %q: injecting into nestor's config file is not allowed", dest)
-		}
+	// A managed dotfile dest loses the injected value on the next deploy:
+	// templates render with no secret data, so the overwrite is silent.
+	// The dotfile side of this pair is refused in config validate() and in
+	// addDotfile; this is the inject side (session #113).
+	if pathutil.IsManagedDotfileDest(dest, dotfileDests, promptInjectHome()) {
+		fmt.Fprintf(out, "nestor: refusing inject target %s: it is a managed dotfile destination — the next deploy overwrites the injected value\n", dest)
+		return "", "", fmt.Errorf("invalid inject target %q: injecting into a managed dotfile destination is not allowed", dest)
 	}
 	defaultPattern := fmt.Sprintf("%s: {{.%s}}", name, name)
 	fmt.Fprintf(out, "template pattern for %s (default %q): ", dest, defaultPattern)
@@ -371,6 +382,27 @@ func promptInjectTarget(name string, in io.Reader, out io.Writer) (dest, pattern
 		pattern = defaultPattern
 	}
 	return dest, pattern, nil
+}
+
+// isLiveConfigPath reports whether dest refers to this nestor's live config
+// file: the XDG location (pathutil.IsSelfInject) or wherever --config points.
+// Both expanded and absolute forms are compared so a relative dest typed at
+// a prompt still collides. Shared by the add-dotfile and add-secret prompts
+// (session #113).
+func isLiveConfigPath(dest, home string) bool {
+	if pathutil.IsSelfInject(dest, home) {
+		return true
+	}
+	if live := configPath(); live != "" {
+		expanded := pathutil.ExpandHome(dest, home)
+		if absDest, absErr := filepath.Abs(dest); absErr == nil {
+			expanded = expanded + "\x00" + absDest
+		}
+		if strings.Contains("\x00"+expanded+"\x00", "\x00"+live+"\x00") {
+			return true
+		}
+	}
+	return false
 }
 
 // writeConfig writes the config back to disk preserving YAML formatting.

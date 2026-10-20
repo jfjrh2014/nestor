@@ -596,7 +596,10 @@ func TestValidateAcceptsSelfInjectLookalike(t *testing.T) {
 
 // TestValidateRejectsManagedDotfileInjectTarget: templates render with no
 // secret data, so a secret injected into a managed dotfile is overwritten by
-// the next deploy. The mapping is refused.
+// the next deploy. The mapping is refused. Since session #113 both sides of
+// the collision are checked and the template loop fires first (templates are
+// validated before mappings), so the error names the collision from the
+// dotfile side — the same refusal, whichever door the config came in through.
 func TestValidateRejectsManagedDotfileInjectTarget(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -615,8 +618,8 @@ func TestValidateRejectsManagedDotfileInjectTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for managed-dotfile inject target, got nil")
 	}
-	if !strings.Contains(err.Error(), "managed dotfile") {
-		t.Errorf("error should name the dotfile collision, got: %v", err)
+	if !strings.Contains(err.Error(), "declared secret inject target") {
+		t.Errorf("error should name the inject-target collision, got: %v", err)
 	}
 }
 
@@ -660,7 +663,181 @@ func TestValidateRejectsProfileManagedDotfileInjectTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for profile self-colliding inject target, got nil")
 	}
-	if !strings.Contains(err.Error(), "managed dotfile") {
-		t.Errorf("error should name the dotfile collision, got: %v", err)
+	if !strings.Contains(err.Error(), "declared secret inject target") {
+		t.Errorf("error should name the inject-target collision, got: %v", err)
+	}
+}
+
+// TestValidateRejectsDotfileDestSelfConfig: a dotfile template whose dest is
+// nestor's own config file would have every deploy rewrite the config that
+// drives it (session #113, mirror of the inject-side self-inject refusal).
+func TestValidateRejectsDotfileDestSelfConfig(t *testing.T) {
+	t.Run("base template", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("HOME", dir)
+		cfg := &Config{
+			Version: 1,
+			Dotfiles: Dotfiles{
+				Strategy:  "copy",
+				Templates: []Template{{Src: "n.tmpl", Dest: "~/.config/nestor/nestor.yml"}},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for dotfile dest = nestor.yml, got nil")
+		}
+		if !strings.Contains(err.Error(), "nestor's own config file") {
+			t.Errorf("error should name the config file, got: %v", err)
+		}
+	})
+	t.Run("profile template", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("HOME", dir)
+		cfg := &Config{
+			Version: 1,
+			Profiles: map[string]Profile{
+				"work": {Dotfiles: []Template{{Src: "n.tmpl", Dest: "~/.config/nestor/nestor.yml"}}},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for profile dotfile dest = nestor.yml, got nil")
+		}
+		if !strings.Contains(err.Error(), "nestor's own config file") {
+			t.Errorf("error should name the config file, got: %v", err)
+		}
+	})
+}
+
+// TestValidateRejectsDotfileOnInjectTarget: a dotfile template whose dest is
+// a declared inject target corrupts on every run without a successful inject
+// (provider down, restore, snapshot) — the deploy silently overwrites the
+// injected value. Refused across layers, both directions.
+func TestValidateRejectsDotfileOnInjectTarget(t *testing.T) {
+	t.Run("base template vs base inject", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("HOME", dir)
+		cfg := &Config{
+			Version: 1,
+			Dotfiles: Dotfiles{
+				Strategy:  "copy",
+				Templates: []Template{{Src: "app.tmpl", Dest: "~/.config/app/conf"}},
+			},
+			Secrets: Secrets{
+				Provider: "env",
+				Mappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.config/app/conf": "tok: {{.tok}}"}}},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for template dest on inject target, got nil")
+		}
+		if !strings.Contains(err.Error(), "declared secret inject target") {
+			t.Errorf("error should name the inject-target collision, got: %v", err)
+		}
+	})
+	t.Run("profile template vs base inject", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("HOME", dir)
+		cfg := &Config{
+			Version: 1,
+			Dotfiles: Dotfiles{
+				Strategy: "copy",
+			},
+			Secrets: Secrets{
+				Provider: "env",
+				Mappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.config/app/conf": "tok: {{.tok}}"}}},
+			},
+			Profiles: map[string]Profile{
+				"work": {Dotfiles: []Template{{Src: "app.tmpl", Dest: "~/.config/app/conf"}}},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for profile template on base inject target, got nil")
+		}
+		if !strings.Contains(err.Error(), "declared secret inject target") {
+			t.Errorf("error should name the inject-target collision, got: %v", err)
+		}
+	})
+	t.Run("base template vs profile inject", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("HOME", dir)
+		cfg := &Config{
+			Version: 1,
+			Dotfiles: Dotfiles{
+				Strategy:  "copy",
+				Templates: []Template{{Src: "app.tmpl", Dest: "~/.config/app/conf"}},
+			},
+			Profiles: map[string]Profile{
+				"work": {SecretMappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.config/app/conf": "tok: {{.tok}}"}}}},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for base template on profile inject target, got nil")
+		}
+		if !strings.Contains(err.Error(), "declared secret inject target") {
+			t.Errorf("error should name the inject-target collision, got: %v", err)
+		}
+	})
+	t.Run("disjoint dests still accepted", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("HOME", dir)
+		cfg := &Config{
+			Version: 1,
+			Dotfiles: Dotfiles{
+				Strategy:  "copy",
+				Templates: []Template{{Src: "bashrc.tmpl", Dest: "~/.bashrc"}},
+			},
+			Secrets: Secrets{
+				Provider: "env",
+				Mappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.config/app/conf": "tok: {{.tok}}"}}},
+			},
+			Profiles: map[string]Profile{
+				"work": {Dotfiles: []Template{{Src: "git.tmpl", Dest: "~/.gitconfig"}}},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("disjoint dests should pass, got: %v", err)
+		}
+	})
+}
+
+// TestTemplateDestHelpers pins the dest-collection helpers the validation and
+// 'nestor add' guards share: both layers collected, inject targets from base
+// AND profile mappings.
+func TestTemplateDestHelpers(t *testing.T) {
+	cfg := &Config{
+		Dotfiles: Dotfiles{
+			Templates: []Template{{Src: "a.tmpl", Dest: "~/.bashrc"}},
+		},
+		Secrets: Secrets{
+			Mappings: []Mapping{{Key: "tok", Inject: map[string]string{"~/.x": "v"}}},
+		},
+		Profiles: map[string]Profile{
+			"work": {
+				Dotfiles:       []Template{{Src: "b.tmpl", Dest: "~/.gitconfig"}},
+				SecretMappings: []Mapping{{Key: "k2", Inject: map[string]string{"~/.y": "v"}}},
+			},
+		},
+	}
+	if got := cfg.TemplateDests(); len(got) != 2 || got[0] != "~/.bashrc" || got[1] != "~/.gitconfig" {
+		t.Errorf("TemplateDests() = %v, want both layers", got)
+	}
+	inj := cfg.InjectTargetDests()
+	if len(inj) != 2 {
+		t.Fatalf("InjectTargetDests() = %v, want 2 targets", inj)
+	}
+	for _, want := range []string{"~/.x", "~/.y"} {
+		found := false
+		for _, d := range inj {
+			if d == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("InjectTargetDests() missing %q: %v", want, inj)
+		}
 	}
 }

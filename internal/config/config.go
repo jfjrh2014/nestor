@@ -194,6 +194,9 @@ func (c *Config) validate() error {
 		if pathutil.IsOtherUserTilde(t.Dest) {
 			return fmt.Errorf("dotfiles.templates[%d]: dest %q uses the ~user/... form, which nestor does not expand (it would deploy into your own home)", i, t.Dest)
 		}
+		if err := checkTemplateDestAgainstInject(t.Dest, fmt.Sprintf("dotfiles.templates[%d]", i), c, home); err != nil {
+			return err
+		}
 	}
 
 	// Duplicate destinations cause two templates to overwrite each other.
@@ -244,6 +247,9 @@ func (c *Config) validate() error {
 				return fmt.Errorf("profiles.%s.dotfiles: duplicate dest %q", name, t.Dest)
 			}
 			pdup[t.Dest] = true
+			if err := checkTemplateDestAgainstInject(t.Dest, fmt.Sprintf("profiles.%s.dotfiles[%d]", name, i), c, home); err != nil {
+				return err
+			}
 		}
 		for i, m := range prof.SecretMappings {
 			if m.Key == "" {
@@ -269,6 +275,65 @@ func (c *Config) validate() error {
 		}
 	}
 
+	return nil
+}
+
+// TemplateDests returns every destination a dotfile template may deploy to:
+// the base templates plus each profile's layer. Validation, 'nestor add' and
+// the deploy path use it to refuse a dotfile whose dest is a declared secret
+// inject target — a deploy overwrites the injected value silently, the exact
+// corruption the inject-side checks in validate() refuse in the other
+// direction.
+func (c *Config) TemplateDests() []string {
+	dests := make([]string, 0, len(c.Dotfiles.Templates))
+	for _, t := range c.Dotfiles.Templates {
+		dests = append(dests, t.Dest)
+	}
+	for _, prof := range c.Profiles {
+		for _, t := range prof.Dotfiles {
+			dests = append(dests, t.Dest)
+		}
+	}
+	return dests
+}
+
+// InjectTargetDests returns every destination a secret may be injected into:
+// the base mappings plus each profile's layer. Validation, 'nestor add' and
+// the deploy path use it to refuse a dotfile template whose dest is a
+// declared inject target — the same corruption, seen from the dotfile side.
+func (c *Config) InjectTargetDests() []string {
+	dests := make([]string, 0)
+	for _, m := range c.Secrets.Mappings {
+		for dest := range m.Inject {
+			dests = append(dests, dest)
+		}
+	}
+	for _, prof := range c.Profiles {
+		for _, m := range prof.SecretMappings {
+			for dest := range m.Inject {
+				dests = append(dests, dest)
+			}
+		}
+	}
+	return dests
+}
+
+// checkTemplateDestAgainstInject refuses a dotfile template whose dest is a
+// declared secret inject target or nestor's own config file. Deploying the
+// template overwrites the injected value silently (templates render with no
+// secret data) — the mirror image of the inject-onto-managed-dotfile check
+// above, which refuses the same pair from the secret side. nestor.yml as a
+// dotfile dest would have every deploy rewrite the config that drives it.
+// The inject target list spans base AND profile layers: a profile template
+// that collides with a base inject target corrupts on every plain 'nestor up'
+// (dotfiles deploy, then base inject targets receive values).
+func checkTemplateDestAgainstInject(dest, label string, c *Config, home string) error {
+	if pathutil.IsSelfInject(dest, home) {
+		return fmt.Errorf("%s: dest %q is nestor's own config file — every deploy would rewrite the config that drives it", label, dest)
+	}
+	if pathutil.IsManagedDotfileDest(dest, c.InjectTargetDests(), home) {
+		return fmt.Errorf("%s: dest %q is a declared secret inject target — deploying the template overwrites the injected value", label, dest)
+	}
 	return nil
 }
 
