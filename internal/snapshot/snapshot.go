@@ -71,7 +71,15 @@ func createIn(base string, destPaths []string) (*Snapshot, error) {
 		}
 		p = expanded
 		if _, err := os.Stat(p); err != nil {
-			// doesn't exist yet — nothing to back up
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("backup %s: %w", p, err)
+			}
+			// doesn't exist yet — nothing to back up, but the dest is still
+			// part of this snapshot: record it so the manifest tells the
+			// whole truth about what was captured, and so a later restore
+			// knows this dest legitimately had no backup. Backup "" marks
+			// the entry skipped.
+			snap.Files = append(snap.Files, FileRef{Original: p})
 			continue
 		}
 		rel := sanitizePath(p)
@@ -193,6 +201,12 @@ func restoreIn(base, id string) (*Snapshot, error) {
 	}
 
 	for _, f := range snap.Files {
+		if f.Backup == "" {
+			// recorded as skipped at capture time (dest did not exist) —
+			// nothing to copy back, and fabricating an empty file at dest
+			// would invent content the user never had
+			continue
+		}
 		// Resolve the dest the same way createIn resolves backup sources: a
 		// manifest may hold a tilde path (hand-edited, restored across
 		// machines, or written by an older build), and copying straight to

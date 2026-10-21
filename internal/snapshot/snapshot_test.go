@@ -20,11 +20,22 @@ func TestCreateSkipsMissingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createIn: %v", err)
 	}
-	if len(snap.Files) != 1 {
-		t.Fatalf("expected 1 file (skipped missing), got %d", len(snap.Files))
+	// 2026-10-21: a missing dest is recorded as a FileRef with an empty
+	// Backup, so the manifest tells the whole truth about the capture.
+	if len(snap.Files) != 2 {
+		t.Fatalf("expected 2 files (1 captured + 1 recorded skip), got %d", len(snap.Files))
 	}
-	if snap.Files[0].Original != existing {
-		t.Errorf("original = %q, want %q", snap.Files[0].Original, existing)
+	if snap.Files[0].Original != existing || snap.Files[0].Backup == "" {
+		t.Errorf("captured entry = %+v, want existing with a backup path", snap.Files[0])
+	}
+	if snap.Files[1].Backup != "" {
+		t.Errorf("skipped entry Backup = %q, want empty", snap.Files[1].Backup)
+	}
+	if snap.Files[1].Original == existing {
+		t.Errorf("skipped entry duplicated the captured dest %q", existing)
+	}
+	if snap.Files[1].Backup != "" {
+		t.Errorf("skipped entry Backup = %q, want empty", snap.Files[1].Backup)
 	}
 }
 
@@ -1335,5 +1346,99 @@ func TestRestoreRefusesSymlinkDest(t *testing.T) {
 	}
 	if string(got) != "target-original\n" {
 		t.Errorf("target content = %q, want byte-for-byte unchanged", got)
+	}
+}
+
+// TestCreateRecordsSkippedMissingDest: a dest that does not exist at capture
+// time was silently dropped from the manifest (bare continue) — restore of
+// that snapshot then restored fewer files than the deploy declares, with
+// nothing recording that the dest legitimately had no backup. The skip is
+// now recorded as a FileRef with an empty Backup, and restore skips those
+// entries instead of fabricating content.
+func TestCreateRecordsSkippedMissingDest(t *testing.T) {
+	base := t.TempDir()
+	existing := filepath.Join(base, "real.conf")
+	if err := os.WriteFile(existing, []byte("real"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ghost := filepath.Join(base, "ghost.conf")
+
+	snap, err := createIn(base, []string{existing, ghost})
+	if err != nil {
+		t.Fatalf("createIn: %v", err)
+	}
+	if len(snap.Files) != 2 {
+		t.Fatalf("manifest files = %d, want 2 (captured + recorded skip)", len(snap.Files))
+	}
+	var skipped *FileRef
+	for i := range snap.Files {
+		if snap.Files[i].Original == ghost {
+			skipped = &snap.Files[i]
+		}
+	}
+	if skipped == nil {
+		t.Fatalf("missing dest %q not recorded in manifest", ghost)
+	}
+	if skipped.Backup != "" {
+		t.Errorf("skipped entry Backup = %q, want empty", skipped.Backup)
+	}
+	if _, err := os.Stat(filepath.Join(base, snap.ID, ghost)); err == nil {
+		t.Errorf("backup file was written for missing dest: %s", ghost)
+	}
+
+	// Restore must skip the recorded skip without touching dest or erroring.
+	restored, err := restoreIn(base, snap.ID)
+	if err != nil {
+		t.Fatalf("restoreIn over manifest with recorded skip: %v", err)
+	}
+	if len(restored.Files) != 2 {
+		t.Fatalf("restored.Files = %d, want 2 (manifest round-trips)", len(restored.Files))
+	}
+	if _, err := os.Stat(ghost); !os.IsNotExist(err) {
+		t.Errorf("restore created content at skipped dest %s", ghost)
+	}
+
+	// Round-trip through the on-disk manifest: skipped entries survive a
+	// marshal/unmarshal cycle (empty Backup persists as "").
+	data, err := os.ReadFile(filepath.Join(base, snap.ID, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromDisk Snapshot
+	if err := json.Unmarshal(data, &fromDisk); err != nil {
+		t.Fatalf("parsing manifest: %v", err)
+	}
+	if len(fromDisk.Files) != 2 {
+		t.Fatalf("on-disk manifest files = %d, want 2", len(fromDisk.Files))
+	}
+	for _, f := range fromDisk.Files {
+		if f.Original == ghost && f.Backup != "" {
+			t.Errorf("on-disk manifest skip entry Backup = %q, want empty", f.Backup)
+		}
+	}
+}
+
+// TestRestoreOnlySkipsEntry: a snapshot whose every file was a recorded skip
+// (first up before any dest existed) restores cleanly and touches nothing.
+func TestRestoreOnlySkipsEntry(t *testing.T) {
+	base := t.TempDir()
+	ghost := filepath.Join(base, "never-existed.conf")
+
+	snap, err := createIn(base, []string{ghost})
+	if err != nil {
+		t.Fatalf("createIn: %v", err)
+	}
+	if len(snap.Files) != 1 {
+		t.Fatalf("manifest files = %d, want 1 (recorded skip)", len(snap.Files))
+	}
+	restored, err := restoreIn(base, snap.ID)
+	if err != nil {
+		t.Fatalf("restoreIn all-skip manifest: %v", err)
+	}
+	if len(restored.Files) != 1 {
+		t.Fatalf("restored.Files = %d, want 1", len(restored.Files))
+	}
+	if _, err := os.Stat(ghost); !os.IsNotExist(err) {
+		t.Errorf("restore created content at skipped dest %s", ghost)
 	}
 }
