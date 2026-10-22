@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/dotfiles"
 	"github.com/jfjrh2014/nestor/internal/packages"
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"github.com/jfjrh2014/nestor/internal/platform"
 	"github.com/jfjrh2014/nestor/internal/secrets"
 	"github.com/jfjrh2014/nestor/internal/shell"
@@ -177,7 +179,25 @@ func runUp(ctx context.Context) error {
 
 		p.Info(fmt.Sprintf("deploying %d templates (%s strategy)", len(temps), strategy))
 
-		deployer := dotfiles.Deployer{Strategy: strategy, Source: source}
+		// Engine guard: hand the deployer the absolute paths it must never
+		// write — declared inject targets and this nestor's live config.
+		// Validation refuses the collision, but a hand-edited config reaches
+		// the engine unrefused: this is the last line of defense (mirrors
+		// injectOne's self-inject guard).
+		var protected []string
+		home, _ := os.UserHomeDir()
+		for _, dest := range cfg.InjectTargetDests() {
+			if resolved, err := pathutil.ResolveHome(dest, home); err == nil && resolved != "" {
+				protected = append(protected, resolved)
+			}
+		}
+		if live := configPath(); live != "" {
+			if abs, err := filepath.Abs(live); err == nil {
+				protected = append(protected, abs)
+			}
+		}
+
+		deployer := dotfiles.Deployer{Strategy: strategy, Source: source, ProtectedDests: protected}
 		results := deployer.DeployAll(temps)
 
 		deployed, failedCount := 0, 0

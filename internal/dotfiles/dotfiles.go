@@ -63,6 +63,14 @@ func (s Status) String() string {
 type Deployer struct {
 	Strategy Strategy
 	Source   string // root dir that template Src paths resolve from
+	// ProtectedDests are absolute paths the deploy must never write:
+	// declared secret inject targets and nestor's own config file. Config
+	// validation refuses those collisions, but a config written by hand or
+	// by an older nestor that never validated reaches the engine unrefused —
+	// a template over an inject target destroys the injected value on every
+	// run, one over nestor.yml rewrites the config that drives it. Empty
+	// (the default from status commands) disables the guard.
+	ProtectedDests []string
 }
 
 // DeployAll deploys every template and returns a result per template.
@@ -82,6 +90,17 @@ func (d Deployer) Deploy(t Template) Result {
 	dest, destErr := pathutil.ResolveHome(t.Dest, currentHome())
 	if destErr != nil {
 		return Result{Template: t, Status: StatusError, Err: fmt.Errorf("dest: %w", destErr)}
+	}
+
+	// Never deploy onto a protected dest: an inject target loses its
+	// injected value on every run (templates render with no secret data),
+	// nestor.yml gets rewritten by the config that drives it. The engine
+	// guard mirrors injectOne's self-inject guard — it covers configs
+	// written by hand or by an older nestor that never validated.
+	for _, protected := range d.ProtectedDests {
+		if dest == protected {
+			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("dest %q is a protected destination (secret inject target or nestor's own config); refusing to deploy over it", t.Dest)}
+		}
 	}
 
 	if _, err := os.Stat(src); err != nil {

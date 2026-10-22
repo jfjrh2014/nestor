@@ -1547,3 +1547,151 @@ func TestSymlinkFallbackKeepsCopyLanded(t *testing.T) {
 		t.Fatalf("dest content = %q, want the fallback copy", got)
 	}
 }
+
+// TestDeployRefusesProtectedDest: config validation refuses a template whose
+// dest is a secret inject target or nestor's own config, but a config written
+// by hand or by an older nestor reaches the engine unrefused. The deploy must
+// refuse loudly and leave the protected file byte-for-byte intact — deploying
+// it would destroy the injected value on every run (templates render with no
+// secret data) or rewrite the config that drives the deploy.
+func TestDeployRefusesProtectedDest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	src := filepath.Join(dir, "gitconfig.tmpl")
+	if err := os.WriteFile(src, []byte("[user]\n\tname = {{env \"NESTOR_TEST_USER\"}}\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	injectDest := filepath.Join(dir, "target", "app.conf")
+	if err := os.MkdirAll(filepath.Dir(injectDest), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(injectDest, []byte("token: injected-value\n"), 0o600); err != nil {
+		t.Fatalf("write inject dest: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir, ProtectedDests: []string{injectDest}}
+	r := d.Deploy(Template{Src: "gitconfig.tmpl", Dest: injectDest})
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for protected dest, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "protected destination") {
+		t.Fatalf("expected protected-dest refusal error, got %v", r.Err)
+	}
+	got, err := os.ReadFile(injectDest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "token: injected-value\n" {
+		t.Fatalf("protected dest was modified: %q", got)
+	}
+	litter, err := filepath.Glob(filepath.Join(filepath.Dir(injectDest), "*nestor-tmp*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(litter) != 0 {
+		t.Fatalf("temp files left behind: %v", litter)
+	}
+}
+
+// TestDeployRefusesProtectedDestSymlinkStrategy: the symlink path resolves
+// the same protected list — a link pointed at the template is still a
+// corruption of the protected dest.
+func TestDeployRefusesProtectedDestSymlinkStrategy(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	src := filepath.Join(dir, "plain.conf")
+	if err := os.WriteFile(src, []byte("plain\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	protected := filepath.Join(dir, "nestor.yml")
+	if err := os.WriteFile(protected, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatalf("write protected: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategySymlink, Source: dir, ProtectedDests: []string{protected}}
+	r := d.Deploy(Template{Src: "plain.conf", Dest: protected})
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for protected dest (symlink strategy), got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "protected destination") {
+		t.Fatalf("expected protected-dest refusal error, got %v", r.Err)
+	}
+	info, err := os.Lstat(protected)
+	if err != nil {
+		t.Fatalf("protected dest missing: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("protected dest was replaced with a symlink")
+	}
+	got, err := os.ReadFile(protected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "version: 1\n" {
+		t.Fatalf("protected dest was modified: %q", got)
+	}
+}
+
+// TestDeployUnprotectedDestStillDeploys: the guard keys on the declared
+// protection, not on the deploy itself — the same deployer shape with no
+// protected dests must keep deploying normally.
+func TestDeployUnprotectedDestStillDeploys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	src := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(src, []byte("[user]\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dest := filepath.Join(dir, "out", ".gitconfig")
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir, ProtectedDests: []string{filepath.Join(dir, "elsewhere", "other.conf")}}
+	r := d.Deploy(Template{Src: "gitconfig", Dest: dest})
+
+	if r.Status != StatusDeployed {
+		t.Fatalf("expected Deployed, got %s (%v)", r.Status, r.Err)
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("dest missing after deploy: %v", err)
+	}
+}
+
+// TestDeployAllRefusesProtectedDest: DeployAll carries the guard too — a
+// hand-edited config's whole list deploys without one colliding entry
+// destroying its target.
+func TestDeployAllRefusesProtectedDest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	src := filepath.Join(dir, "plain.conf")
+	if err := os.WriteFile(src, []byte("plain\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	protected := filepath.Join(dir, "target.conf")
+	if err := os.WriteFile(protected, []byte("token: injected-value\n"), 0o600); err != nil {
+		t.Fatalf("write protected: %v", err)
+	}
+
+	d := Deployer{Strategy: StrategyCopy, Source: dir, ProtectedDests: []string{protected}}
+	results := d.DeployAll([]Template{
+		{Src: "plain.conf", Dest: filepath.Join(dir, "out", "fine.conf")},
+		{Src: "plain.conf", Dest: protected},
+	})
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Status != StatusDeployed {
+		t.Fatalf("unprotected template should deploy, got %s (%v)", results[0].Status, results[0].Err)
+	}
+	if results[1].Status != StatusError {
+		t.Fatalf("protected template should error, got %s", results[1].Status)
+	}
+	got, err := os.ReadFile(protected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "token: injected-value\n" {
+		t.Fatalf("protected dest was modified: %q", got)
+	}
+}
