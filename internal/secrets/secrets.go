@@ -197,10 +197,21 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 
 	// Never inject into nestor's own config file: the append/rewrite paths
 	// below would leave a rendered "key: value" line in nestor.yml, and the
-	// next Load would brick every command. Config validation refuses this
+	// next Load would brick every command. The guard covers both the XDG
+	// location (pathutil.IsSelfInject) and the live config path wherever
+	// --config points: a config run with -c that declares its own file as
+	// an inject target would otherwise be rewritten on every 'nestor up'
+	// (validation only knows the XDG shape). Config validation refuses that
 	// mapping too; the guard here also covers configs written by hand or by
 	// an older nestor that never validated. ConfigPathFn is a test seam.
-	if pathutil.IsSelfInject(dest, currentHome()) && dest == configPathFn() {
+	live := configPathFn()
+	if live != "" {
+		if absLive, absErr := filepath.Abs(live); absErr == nil {
+			live = absLive
+		}
+	}
+	destAbs, destAbsErr := filepath.Abs(dest)
+	if pathutil.IsSelfInject(dest, currentHome()) || (destAbsErr == nil && destAbs == live) {
 		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("dest %q is nestor's own config file; refusing to inject into it", dest)}
 	}
 

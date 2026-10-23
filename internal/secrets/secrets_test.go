@@ -927,3 +927,97 @@ func TestInjectOneAllowsSameShapedRegularFile(t *testing.T) {
 		t.Fatalf("expected StatusInjected for lookalike path, got %s (%v)", r.Status, r.Err)
 	}
 }
+
+// TestInjectOneRefusesLiveConfigPath: nestor -c /work/my.yml with a mapping
+// whose inject target is that same file — validate only knows the XDG shape,
+// so without the live-path half of the guard every 'nestor up' appends a
+// rendered line to the config it runs from.
+func TestInjectOneRefusesLiveConfigPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfgPath := filepath.Join(dir, "work", "my.yml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := configPathFn
+	configPathFn = func() string { return cfgPath }
+	defer func() { configPathFn = orig }()
+
+	r := injectOne("tok", "s3cret", cfgPath, "tok: {{.Key}}")
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for live config dest, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "own config file") {
+		t.Fatalf("expected config-file refusal error, got %v", r.Err)
+	}
+	got, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "version: 1\n" {
+		t.Fatalf("live config was modified: %q", got)
+	}
+}
+
+// TestInjectOneRefusesRelativeConfigDest: a dest typed relative to the cwd
+// that lands on the live config file must collide too.
+func TestInjectOneRefusesRelativeConfigDest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfgPath := filepath.Join(dir, "my.yml")
+	if err := os.WriteFile(cfgPath, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := configPathFn
+	configPathFn = func() string { return cfgPath }
+	defer func() { configPathFn = orig }()
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	r := injectOne("tok", "s3cret", "my.yml", "tok: {{.Key}}")
+
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for relative config dest, got %s", r.Status)
+	}
+	got, _ := os.ReadFile(cfgPath)
+	if string(got) != "version: 1\n" {
+		t.Fatalf("live config was modified: %q", got)
+	}
+}
+
+// TestInjectOneAllowsConfigPathLookalike pins the untouched path: a file in
+// another directory that happens to share the config's basename still
+// injects — the guard keys on the resolved live path, not the file name.
+func TestInjectOneAllowsConfigPathLookalike(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	other := filepath.Join(dir, "elsewhere")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := configPathFn
+	configPathFn = func() string { return filepath.Join(dir, "my.yml") }
+	defer func() { configPathFn = orig }()
+
+	dest := filepath.Join(other, "my.yml")
+	r := injectOne("tok", "s3cret", dest, "tok: {{.Key}}")
+
+	if r.Status != StatusInjected {
+		t.Fatalf("expected StatusInjected for lookalike path, got %s (%v)", r.Status, r.Err)
+	}
+}
