@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -718,5 +719,84 @@ func TestWriteSourceBlock_RefusesDanglingSymlink(t *testing.T) {
 	}
 	if _, statErr := os.Lstat(target); statErr == nil {
 		t.Error("dangling target was materialized on refusal")
+	}
+}
+
+// TestWriteSourceBlock_RefusesUnreadableRc: a mode-000 rc (the machine test
+// runs as root can't create one, so readRcFile is overridden) must be
+// refused — the old `existing, _ := os.ReadFile` fell through to the append
+// branch with empty content and regenerated the rc block-only, dropping
+// every user line from the file the user cannot currently read.
+func TestWriteSourceBlock_RefusesUnreadableRc(t *testing.T) {
+	dir := t.TempDir()
+	rcPath := filepath.Join(dir, ".zshrc")
+	rcContent := []byte("export EDITOR=vim\n# my hand edits\n")
+	if err := os.WriteFile(rcPath, rcContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := readRcFile
+	readRcFile = func(string) ([]byte, error) {
+		return nil, &fs.PathError{Op: "open", Path: rcPath, Err: os.ErrPermission}
+	}
+	defer func() { readRcFile = orig }()
+
+	err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"})
+	if err == nil {
+		t.Fatal("expected refusal on unreadable rc, got nil")
+	}
+	if !contains(err.Error(), "reading rc") {
+		t.Errorf("error should name the read failure, got: %v", err)
+	}
+	got, readBackErr := os.ReadFile(rcPath)
+	if readBackErr != nil {
+		t.Fatalf("rc unreadable after refusal: %v", readBackErr)
+	}
+	if string(got) != string(rcContent) {
+		t.Errorf("rc was modified on refusal:\n got: %q\nwant: %q", got, rcContent)
+	}
+}
+
+// TestWriteSourceBlock_TreatsENotDirAsError: a directory sitting at the rc
+// path raises ENOTDIR ("is a directory"), not NotExist — it must reach the
+// refusal instead of the append branch, whose durable rename over the
+// directory can only fail later with a cryptic "file exists" (probed on
+// go1.19: rename file over empty dir → EEXIST).
+func TestWriteSourceBlock_TreatsENotDirAsError(t *testing.T) {
+	dir := t.TempDir()
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.Mkdir(rcPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// No seam override needed: os.ReadFile on a directory fails with
+	// "is a directory" (ENOTDIR), which errors.Is(err, ErrNotExist)
+	// classifies as false.
+	err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"})
+	if err == nil {
+		t.Fatal("expected refusal when a directory sits at the rc path, got nil")
+	}
+	if !contains(err.Error(), "reading rc") {
+		t.Errorf("error should name the read failure, got: %v", err)
+	}
+	if info, statErr := os.Lstat(rcPath); statErr != nil || !info.IsDir() {
+		t.Errorf("directory at rc path was altered: %v (stat err %v)", info, statErr)
+	}
+}
+
+// TestWriteSourceBlock_MissingRcStartsEmpty pins the normal first-run shape:
+// an absent rc is append-branch (block-only new file), and the seam restores
+// cleanly after the override test.
+func TestWriteSourceBlock_MissingRcStartsEmpty(t *testing.T) {
+	rcPath := filepath.Join(t.TempDir(), ".zshrc")
+	if err := WriteSourceBlock(rcPath, []string{"source /fake/p/p.zsh"}); err != nil {
+		t.Fatalf("WriteSourceBlock on missing rc: %v", err)
+	}
+	data, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "source /fake/p/p.zsh") {
+		t.Errorf("expected managed block content, got: %q", data)
 	}
 }

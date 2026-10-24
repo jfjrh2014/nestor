@@ -1,12 +1,15 @@
 package shell
 
 import (
+	"errors"
 	"fmt"
-	"github.com/jfjrh2014/nestor/internal/fsutil"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 )
 
 const (
@@ -249,6 +252,11 @@ func SourceLines(results []PluginResult) (lines []string, unresolved []Plugin) {
 // silently replace the user's link — a stow/dotfiles-repo rc — with a
 // regular file, un-symlinking it from their repo (probed). A dangling
 // link (target missing) is refused: nothing to follow, nothing to write.
+// readRcFile is the seam over os.ReadFile for WriteSourceBlock: tests
+// override it to reproduce unreadable rc files that a root-run test cannot
+// create. nil restores the default.
+var readRcFile = os.ReadFile
+
 func WriteSourceBlock(rcPath string, sourceLines []string) error {
 	if isDanglingSymlink(rcPath) {
 		return fmt.Errorf("%s is a broken symlink — repair or remove it by hand, then re-run 'nestor up'", rcPath)
@@ -259,7 +267,17 @@ func WriteSourceBlock(rcPath string, sourceLines []string) error {
 		rcPath = rcReal
 	}
 
-	existing, _ := os.ReadFile(rcPath)
+	existing, readErr := readRcFile(rcPath)
+	if readErr != nil {
+		// A missing file is the normal first-run shape: the block starts from
+		// an empty rc (matched only by IsNotExist — ENOTDIR, the error a
+		// directory-in-the-way actually raises, must NOT fall into the
+		// append branch, or the write below tries to rename over the dir).
+		if !errors.Is(readErr, fs.ErrNotExist) {
+			return fmt.Errorf("reading rc %s: %w", rcPath, readErr)
+		}
+		existing = nil
+	}
 	content := string(existing)
 
 	newBlock := markerBegin + "\n"
