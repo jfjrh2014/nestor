@@ -301,8 +301,10 @@ func TestInjectAllMkdirBlocked(t *testing.T) {
 }
 
 // TestInjectAllDestIsDirectory covers the refusal path when dest itself is
-// a directory: the durable rewrite must fail at the final rename (EISDIR)
-// and be reported as a StatusError, not a panic or silent skip.
+// a directory: ReadFile fails with EISDIR, so the injection refuses up front
+// ("read dest") instead of reaching the durable writer and failing at the
+// rename with a cryptic "file exists" (the pre-fix behavior this test used
+// to pin).
 func TestInjectAllDestIsDirectory(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "iamdir")
@@ -318,16 +320,24 @@ func TestInjectAllDestIsDirectory(t *testing.T) {
 	if len(results) != 1 || results[0].Status != StatusError {
 		t.Fatalf("expected StatusError, got %+v", results)
 	}
-	if results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "file exists") {
-		t.Fatalf("expected rename failure on directory dest, got %v", results[0].Err)
+	if results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "read dest") {
+		t.Fatalf("expected read-dest refusal on directory dest, got %v", results[0].Err)
 	}
-	// The temp file must not litter the parent dir.
+	// Nothing written anywhere: no temp litter in the parent, nothing in the
+	// directory dest itself.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 || entries[0].Name() != "iamdir" {
 		t.Fatalf("temp litter in parent dir: %v", entries)
+	}
+	inner, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inner) != 0 {
+		t.Fatalf("directory dest was written into: %v", inner)
 	}
 }
 
@@ -1019,5 +1029,83 @@ func TestInjectOneAllowsConfigPathLookalike(t *testing.T) {
 
 	if r.Status != StatusInjected {
 		t.Fatalf("expected StatusInjected for lookalike path, got %s (%v)", r.Status, r.Err)
+	}
+}
+
+// TestInjectOneRefusesDirectoryDest: a directory at dest fails ReadFile with
+// EISDIR, which must refuse the injection — the old append branch rewrote it
+// through the durable writer and died far away at the rename with a cryptic
+// "file exists" (probed). This is the offline-constructible half of the
+// unreadable-dest family; it fails for root too, unlike a mode-000 file.
+func TestInjectOneRefusesDirectoryDest(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "confdir")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r := injectOne("github_token", "ghp_new", dest, "oauth_token: {{.Key}}")
+	if r.Status != StatusError {
+		t.Fatalf("want StatusError for directory dest, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "read dest") {
+		t.Fatalf("expected read-dest refusal, got %v", r.Err)
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("directory dest was written into: %d entries appeared", len(entries))
+	}
+
+	// The guard keys on the defect: a regular file beside it still injects.
+	plain := filepath.Join(dir, "hosts.yml")
+	r = injectOne("github_token", "ghp_new", plain, "oauth_token: {{.Key}}")
+	if r.Status != StatusInjected {
+		t.Fatalf("plain dest should inject unaffected, got %s (%v)", r.Status, r.Err)
+	}
+	data, err := os.ReadFile(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "oauth_token: ghp_new\n" {
+		t.Fatalf("plain dest content = %q, want injected line", data)
+	}
+}
+
+// TestInjectOneRefusesUnreadableDest pins the mode-000 half: a dest that
+// exists but can't be read must refuse with its bytes intact — not fall into
+// the append branch, which replaces every user line with one injected line
+// (probed). Root bypasses mode checks; the directory variant above covers the
+// same branch everywhere.
+func TestInjectOneRefusesUnreadableDest(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: mode-000 is readable, branch covered by TestInjectOneRefusesDirectoryDest")
+	}
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "hosts.yml")
+	original := "# my precious config\nfoo: bar\n"
+	if err := os.WriteFile(dest, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dest, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dest, 0o600) })
+
+	r := injectOne("github_token", "ghp_new", dest, "oauth_token: {{.Key}}")
+	if r.Status != StatusError {
+		t.Fatalf("want StatusError for unreadable dest, got %s", r.Status)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "read dest") {
+		t.Fatalf("expected read-dest refusal, got %v", r.Err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Fatalf("dest bytes changed: got %q, want %q", data, original)
 	}
 }

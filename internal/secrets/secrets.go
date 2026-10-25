@@ -227,6 +227,16 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 	resolved = strings.ReplaceAll(resolved, "{{."+key+"}}", val)
 
 	data, readErr := os.ReadFile(dest)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		// A dest that exists but can't be read — a mode-000 file, a
+		// directory at the path, an I/O error — must not fall into the
+		// append branch: the whole-file rewrite below would replace every
+		// user line with a single injected line (probed: mode-000 hosts.yml
+		// came back append-only), or fail far away at the rename with a
+		// cryptic "file exists" (EISDIR). Refuse loudly with dest untouched;
+		// a missing dest stays the first-run append shape.
+		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("read dest: %w", readErr)}
+	}
 	if readErr == nil && len(data) > 0 {
 		content := string(data)
 
