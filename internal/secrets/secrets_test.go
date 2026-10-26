@@ -1109,3 +1109,22 @@ func TestInjectOneRefusesUnreadableDest(t *testing.T) {
 		t.Fatalf("dest bytes changed: got %q, want %q", data, original)
 	}
 }
+
+// TestSetConfigPathFnNilRestoresDefault pins the exported seam's contract:
+// nil restores the XDG default (mirrors shell.SetCloneURLFn), a non-nil fn
+// replaces it. The CLI wiring (root PersistentPreRun) depends on the nil
+// path for tests that run after one which set a custom path.
+func TestSetConfigPathFnNilRestoresDefault(t *testing.T) {
+	dir := t.TempDir()
+	SetConfigPathFn(func() string { return filepath.Join(dir, "custom.yml") })
+	if got := configPathFn(); got != filepath.Join(dir, "custom.yml") {
+		t.Fatalf("custom fn not installed: %q", got)
+	}
+
+	SetConfigPathFn(nil)
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".config", "nestor", "nestor.yml")
+	if got := configPathFn(); got != want {
+		t.Fatalf("nil restore: configPathFn() = %q, want %q", got, want)
+	}
+}

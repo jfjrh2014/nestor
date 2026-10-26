@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jfjrh2014/nestor/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +21,15 @@ var rootCmd = &cobra.Command{
 packages, dotfiles, secrets, shell config — one config, one command.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		// Hand the live config path to the engine layers that guard against
+		// writing into nestor's own config. Without this, a guard whose
+		// default only knows the XDG location lets `nestor up -c /work/my.yml`
+		// with a self-referential inject target rewrite the config driving
+		// the run on every invocation (session #128). Idempotent and cheap:
+		// a plain string setter, run once per command.
+		secrets.SetConfigPathFn(configPath)
+	},
 }
 
 func Execute(ctx context.Context) error {

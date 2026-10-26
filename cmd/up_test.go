@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -354,5 +355,82 @@ func TestProfileSecretCollisions(t *testing.T) {
 
 	if got := profileSecretCollisions(base, []config.Mapping{{Key: "workonly", Inject: map[string]string{"~/.w": "x"}}}); len(got) != 0 {
 		t.Errorf("no-overlap case returned %v, want none", got)
+	}
+}
+
+// TestUpRefusesSelfInjectViaConfigFlag is the session #128 regression,
+// pinned END-TO-END through cobra: `nestor up -c /work/my.yml` with a
+// mapping whose inject target is that same file must refuse the injection,
+// not append a rendered "key: value" line to the config driving the run.
+// The engine guard existed (session #123) but its config-path seam was
+// never wired in production — only the secrets package's own tests overrode
+// it, so the live binary appended on every run (probed with the pre-fix
+// binary: first 'up' rewrote the file, every later run re-appended).
+// Execute() is what fires rootCmd's PersistentPreRun, which hands the live
+// path to the guard; a unit test of the setter alone would pass even if
+// that wiring were deleted. After the refusal the config must be
+// byte-for-byte intact — template still renderable, next 'up' still works.
+func TestUpRefusesSelfInjectViaConfigFlag(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "work")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(workDir, "my.yml")
+	original := "version: 1\nsecrets:\n  provider: env\n  mappings:\n    - key: NESTOR_TEST_TOKEN\n      inject:\n        my.yml: \"token: {{.NESTOR_TEST_TOKEN}}\"\n"
+	if err := os.WriteFile(cfgPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("NESTOR_TEST_TOKEN", "injected-val")
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+	// SHELL must be set: 'up' reaches the shell step even after the inject
+	// refuses, and Detect errors loudly without it (output noise, not failure).
+	t.Setenv("SHELL", "/bin/bash")
+
+	// The mapping's dest is the RELATIVE "my.yml", exactly the probed shape.
+	// The first cut of this test ran with the process cwd at the package dir,
+	// so injectOne resolved dest to <package>/my.yml and wrote its rendered
+	// line into a bystander file while the config assertion passed vacuously
+	// (the stray file it left behind was the giveaway). chdir into the work
+	// dir so the relative dest and the config are provably the same file,
+	// like the user's shell when they run `nestor up -c my.yml` inside it.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	rootCmd.SetArgs([]string{"up", "-c", cfgPath})
+	defer rootCmd.SetArgs([]string{})
+	if err := Execute(context.Background()); err != nil {
+		t.Fatalf("up returned an error (the refusal should be a reported per-target failure, not a command failure): %v", err)
+	}
+
+	got, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("live config was modified by self-inject:\n--- original ---\n%s\n--- after up ---\n%s", original, string(got))
+	}
+	if strings.Contains(string(got), "injected-val") {
+		t.Error("config contains the rendered secret value — the guard never fired")
+	}
+
+	// The config still loads: no "key: value" line was appended to corrupt it.
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("config no longer loads after up: %v", err)
 	}
 }

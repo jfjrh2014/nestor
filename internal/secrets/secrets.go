@@ -326,11 +326,30 @@ func expandHome(p string) string {
 }
 
 // configPathFn returns the path of nestor's own config file for the
-// self-inject guard. Seam: tests override it; nil restores the default
-// XDG location.
+// self-inject guard. Default: the XDG location. The CLI wires the real
+// live path (XDG, --config, or a local nestor.yml) through SetConfigPathFn
+// on every command; nil restores the default.
 var configPathFn = func() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "nestor", "nestor.yml")
+}
+
+// SetConfigPathFn overrides the config path the self-inject guard compares
+// inject targets against. The CLI calls it once per command (root
+// PersistentPreRun) so `nestor up -c /work/my.yml` guards the file it
+// actually loaded, not just the XDG default: without the live path, a
+// mapping whose inject target is that same file appended a rendered
+// "key: value" line to the config driving the run (session #128, probed
+// end-to-end). Pass nil to restore the XDG default.
+func SetConfigPathFn(fn func() string) {
+	if fn == nil {
+		home, _ := os.UserHomeDir()
+		configPathFn = func() string {
+			return filepath.Join(home, ".config", "nestor", "nestor.yml")
+		}
+		return
+	}
+	configPathFn = fn
 }
 
 // currentHome returns the current user's home, or "" when the lookup fails.
