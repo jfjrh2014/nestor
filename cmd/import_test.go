@@ -243,3 +243,72 @@ func TestImportMissingConfigReturnsError(t *testing.T) {
 		t.Errorf("no output expected on config load failure, got: %q", buf.String())
 	}
 }
+
+// TestImportRefusesSelfConfigTemplate (session #129): a chezmoi source dir
+// managing nestor's own config imports a template whose dest is
+// ~/.config/nestor/nestor.yml. The old code merged and wrote it unvalidated —
+// probed: runImport returned nil and the dest landed in nestor.yml, and the
+// next config load refused the file, bricking every nestor command. The merge
+// is now validated through cfg.Validate() before writeConfig; on refusal the
+// config stays byte-for-byte as it was.
+func TestImportRefusesSelfConfigTemplate(t *testing.T) {
+	dir, cfgPath := setupImportTest(t)
+	src := filepath.Join(dir, "chezmoi")
+	if err := os.MkdirAll(filepath.Join(src, "dot_config", "nestor"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "dot_config", "nestor", "nestor.yml"), []byte("version: 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	err = runImport("chezmoi", src, &buf)
+	if err == nil {
+		t.Fatalf("expected import of nestor's own config to be refused, got nil; output:\n%s", buf.String())
+	}
+	if !strings.Contains(err.Error(), "invalid config") {
+		t.Errorf("error should name the invalid merged config, got: %v", err)
+	}
+
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Error("refused import must leave the config byte-for-byte unchanged")
+	}
+	if strings.Contains(string(after), ".config/nestor/nestor.yml") {
+		t.Error("the colliding dest must not be written into the config")
+	}
+}
+
+// TestImportValidChezmoiStillWrites pins the untouched path: a normal chezmoi
+// dir with regular dotfiles still merges and writes exactly as before.
+func TestImportValidChezmoiStillWrites(t *testing.T) {
+	dir, cfgPath := setupImportTest(t)
+	src := filepath.Join(dir, "chezmoi")
+	if err := os.MkdirAll(filepath.Join(src, "dot_config", "nvim"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "dot_config", "nvim", "init.toml"), []byte("[ok]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runImport("chezmoi", src, &buf); err != nil {
+		t.Fatalf("valid import should succeed, got: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "imported 1 new items") {
+		t.Errorf("output should report the import, got:\n%s", out)
+	}
+	raw, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(raw), ".config/nvim/init.toml") {
+		t.Error("the imported dest should be written into the config")
+	}
+}

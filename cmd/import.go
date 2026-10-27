@@ -95,6 +95,19 @@ func runImport(name, srcPath string, w io.Writer) error {
 		return nil
 	}
 
+	// Validate the merged config before writing it. Importers build dests
+	// straight from the foreign tool's file list (chezmoi decodes its tree
+	// verbatim), so a chezmoi dir managing nestor's own config imports a
+	// template whose dest is ~/.config/nestor/nestor.yml - the next config
+	// load refuses the file and every nestor command bricks (probed:
+	// runImport returned nil and the dest landed in nestor.yml). Same
+	// fossilizer shape as the 'nestor add' prompts: refuse at the write
+	// boundary instead of recording a mapping that corrupts every later run.
+	// On refusal the config is left byte-for-byte as it was.
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("import would produce an invalid config - nothing written: %w", err)
+	}
+
 	if err := writeConfig(nestorPath, cfg); err != nil {
 		return fmt.Errorf("import: %w", err)
 	}
