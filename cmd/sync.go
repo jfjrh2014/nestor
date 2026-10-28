@@ -11,6 +11,7 @@ import (
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"github.com/jfjrh2014/nestor/internal/packages"
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"github.com/jfjrh2014/nestor/internal/platform"
 	"github.com/jfjrh2014/nestor/internal/ui"
 	"github.com/spf13/cobra"
@@ -127,7 +128,7 @@ func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
 	}
 	if existing != nil {
 		p.Warn(fmt.Sprintf("config already exists at %s — merging", outPath))
-		skippedBase := applyScanToConfig(existing, profileName, foundPkgs, foundDots)
+		skippedBase := applyScanToConfig(existing, profileName, foundPkgs, foundDots, home)
 		if skippedBase > 0 {
 			p.Info(fmt.Sprintf("skipped %d base-managed item(s) already in the common sections (profiles hold machine-specific extras only)", skippedBase))
 		}
@@ -193,15 +194,17 @@ func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
 // mis-file shared state as machine-specific. They are skipped and counted;
 // the return value is the number of skipped items so the capture never looks
 // like it silently swallowed anything.
-func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []string, foundDots []config.Template) int {
+func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []string, foundDots []config.Template, home string) int {
 	if profileName != "" {
 		basePkgs := make(map[string]bool, len(cfg.Packages.Common))
 		for _, p := range cfg.Packages.Common {
 			basePkgs[p] = true
 		}
+		// Keyed on the expanded shape: a base entry spelled with "~" and a
+		// scan result spelled absolute are the same file and must dedup.
 		baseDests := make(map[string]bool, len(cfg.Dotfiles.Templates))
 		for _, t := range cfg.Dotfiles.Templates {
-			baseDests[t.Dest] = true
+			baseDests[pathutil.ExpandHome(t.Dest, home)] = true
 		}
 		skipped := 0
 		extraPkgs := make([]string, 0, len(foundPkgs))
@@ -214,7 +217,7 @@ func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []strin
 		}
 		extraDots := make([]config.Template, 0, len(foundDots))
 		for _, t := range foundDots {
-			if baseDests[t.Dest] {
+			if baseDests[pathutil.ExpandHome(t.Dest, home)] {
 				skipped++
 				continue
 			}
@@ -222,12 +225,12 @@ func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []strin
 		}
 		prof := cfg.Profiles[profileName]
 		prof.Packages = mergeStrings(prof.Packages, extraPkgs)
-		prof.Dotfiles = mergeDotfiles(prof.Dotfiles, extraDots)
+		prof.Dotfiles = mergeDotfiles(prof.Dotfiles, extraDots, home)
 		cfg.Profiles[profileName] = prof
 		return skipped
 	}
 	cfg.Packages.Common = mergeStrings(cfg.Packages.Common, foundPkgs)
-	cfg.Dotfiles.Templates = mergeDotfiles(cfg.Dotfiles.Templates, foundDots)
+	cfg.Dotfiles.Templates = mergeDotfiles(cfg.Dotfiles.Templates, foundDots, home)
 	return 0
 }
 
@@ -374,19 +377,23 @@ func mergeStrings(dst, src []string) []string {
 }
 
 // mergeDotfiles appends templates from src to dst whose Dest is not already
-// present, preserving original order. Returns dst if src is empty.
-func mergeDotfiles(dst, src []config.Template) []config.Template {
+// present, preserving original order. Returns dst if src is empty. Dests are
+// compared in the expanded shape (home resolves "~" forms): "~/.bashrc" and
+// the absolute form are the same file, and merging both spellings leaves two
+// templates deploying to one dest last-wins.
+func mergeDotfiles(dst, src []config.Template, home string) []config.Template {
 	if len(src) == 0 {
 		return dst
 	}
 	seen := map[string]bool{}
 	for _, t := range dst {
-		seen[t.Dest] = true
+		seen[pathutil.ExpandHome(t.Dest, home)] = true
 	}
 	for _, t := range src {
-		if !seen[t.Dest] {
+		key := pathutil.ExpandHome(t.Dest, home)
+		if !seen[key] {
 			dst = append(dst, t)
-			seen[t.Dest] = true
+			seen[key] = true
 		}
 	}
 	return dst

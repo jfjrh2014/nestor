@@ -841,3 +841,54 @@ func TestTemplateDestHelpers(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateRejectsDuplicateDestinationsExpandedShape pins the expanded-
+// shape dup rule: "~/.bashrc" and the absolute spelling are the same file.
+// The raw-string compare let both entries coexist — validate passed, two
+// templates deployed to one dest last-wins, and the first deploy re-spelled
+// the other entry's dest through the tilde boundary.
+func TestValidateRejectsDuplicateDestinationsExpandedShape(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	home, _ := os.UserHomeDir()
+	cfg := &Config{
+		Version: 1,
+		Dotfiles: Dotfiles{
+			Strategy: "copy",
+			Templates: []Template{
+				{Src: "a.tmpl", Dest: "~/.bashrc"},
+				{Src: "b.tmpl", Dest: filepath.Join(home, ".bashrc")},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for duplicate dest in tilde vs absolute spelling")
+	}
+	if !strings.Contains(err.Error(), "duplicate dest") {
+		t.Errorf("error should mention duplicate dest, got: %v", err)
+	}
+}
+
+// TestValidateRejectsProfileDuplicateDestinationsExpandedShape pins the same
+// rule inside a profile layer: both spellings of one dest in
+// profiles.<name>.dotfiles are a duplicate.
+func TestValidateRejectsProfileDuplicateDestinationsExpandedShape(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	home, _ := os.UserHomeDir()
+	cfg := &Config{
+		Version: 1,
+		Profiles: map[string]Profile{
+			"work": {
+				Dotfiles: []Template{
+					{Src: "a.tmpl", Dest: "~/.gitconfig"},
+					{Src: "b.tmpl", Dest: filepath.Join(home, ".gitconfig")},
+				},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for profile duplicate dest in tilde vs absolute spelling")
+	}
+}

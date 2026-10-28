@@ -186,7 +186,7 @@ func TestSyncMergeCopiesToEffectiveSource(t *testing.T) {
 	}
 
 	// Merge: existing source wins.
-	cfg.Dotfiles.Templates = mergeDotfiles(cfg.Dotfiles.Templates, detected)
+	cfg.Dotfiles.Templates = mergeDotfiles(cfg.Dotfiles.Templates, detected, "/home/tester")
 	if cfg.Dotfiles.Source == "" {
 		cfg.Dotfiles.Source = defaultSourceDir
 	}
@@ -441,7 +441,7 @@ profiles:
 	if err != nil {
 		t.Fatalf("load existing: %v", err)
 	}
-	applyScanToConfig(existing, "work", []string{"jq", "fzf"}, nil)
+	applyScanToConfig(existing, "work", []string{"jq", "fzf"}, nil, "/home/tester")
 	data, err := config.Marshal(existing)
 	if err != nil {
 		t.Fatalf("marshal merged config: %v", err)
@@ -561,6 +561,7 @@ func TestSyncProfileCaptureSkipsBaseManaged(t *testing.T) {
 	skipped := applyScanToConfig(cfg, "work",
 		[]string{"git", "fzf"}, // git is base-managed, fzf is machine-specific
 		[]config.Template{{Src: ".bashrc.tmpl", Dest: "~/.bashrc"}}, // base-managed dest
+		"/home/tester",
 	)
 
 	if skipped != 2 {
@@ -592,7 +593,7 @@ func TestSyncProfileCaptureNoBaseOverlap(t *testing.T) {
 		},
 	}
 
-	skipped := applyScanToConfig(cfg, "work", []string{"jq"}, nil)
+	skipped := applyScanToConfig(cfg, "work", []string{"jq"}, nil, "/home/tester")
 
 	if skipped != 0 {
 		t.Errorf("skipped = %d, want 0", skipped)

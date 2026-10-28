@@ -1065,3 +1065,99 @@ func TestAddDotfileRefusesSelfConfigDest(t *testing.T) {
 		t.Error("config was modified despite refused dotfile dest")
 	}
 }
+
+// TestAddDotfileDuplicateAbsoluteSpelling pins the expanded-shape dup rule at
+// the add prompt: the base config declares ~/.bashrc, the user adds the
+// absolute form of the same file. The raw `t.Dest == name` compare let the
+// second entry in — the config then held two templates for one dest and both
+// validate() and every 'nestor up' accepted it (last-deploy-wins).
+func TestAddDotfileDuplicateAbsoluteSpelling(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	t.Setenv("HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, ".bashrc"), []byte("export FOO=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	// First add plants the tilde spelling, exactly like the live probe.
+	var out bytes.Buffer
+	if err := addDotfile("~/.bashrc", "", &out); err != nil {
+		t.Fatalf("first addDotfile: %v", err)
+	}
+	before, _ := os.ReadFile(cfgPath)
+
+	// Second add: same file, absolute spelling.
+	out.Reset()
+	if err := addDotfile(filepath.Join(dir, ".bashrc"), "", &out); err != nil {
+		t.Fatalf("absolute-spelling addDotfile: %v", err)
+	}
+	if !strings.Contains(out.String(), "already in config") {
+		t.Errorf("expected duplicate message for absolute spelling, got: %s", out.String())
+	}
+
+	// Config byte-for-byte unchanged: no second entry, no template materialized.
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config file was modified despite duplicate-dest refusal")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dotfiles", ".bashrc.tmpl")); err == nil {
+		// The first add materialized this; the second must NOT re-copy it.
+		entries, _ := os.ReadDir(filepath.Join(dir, "dotfiles"))
+		if len(entries) != 1 {
+			t.Errorf("source dir = %d entries, want 1 (no new template on dup add)", len(entries))
+		}
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load after dup: %v", err)
+	}
+	if len(cfg.Dotfiles.Templates) != 1 {
+		t.Errorf("expected 1 template after absolute-spelling dup add, got %d", len(cfg.Dotfiles.Templates))
+	}
+}
+
+// TestAddDotfileProfileDuplicateAbsoluteSpelling pins the same rule inside a
+// profile: a profile entry spelled with "~" refuses the absolute form of the
+// same dest instead of writing a second profile template for one file.
+func TestAddDotfileProfileDuplicateAbsoluteSpelling(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	appendProfilesSection(t, cfgPath, "work")
+	t.Setenv("HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, ".bashrc"), []byte("export FOO=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	if err := addDotfile("~/.bashrc", "work", &out); err != nil {
+		t.Fatalf("first addDotfile (profile): %v", err)
+	}
+	before, _ := os.ReadFile(cfgPath)
+
+	out.Reset()
+	if err := addDotfile(filepath.Join(dir, ".bashrc"), "work", &out); err != nil {
+		t.Fatalf("absolute-spelling profile addDotfile: %v", err)
+	}
+	if !strings.Contains(out.String(), "already in profile") {
+		t.Errorf("expected profile duplicate message, got: %s", out.String())
+	}
+
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config file was modified despite profile duplicate-dest refusal")
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load after dup: %v", err)
+	}
+	if len(cfg.Profiles["work"].Dotfiles) != 1 {
+		t.Errorf("profile work dotfiles = %d entries, want 1", len(cfg.Profiles["work"].Dotfiles))
+	}
+}

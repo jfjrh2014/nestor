@@ -191,13 +191,14 @@ func addDotfile(name, profileName string, out io.Writer) error {
 	if profileName != "" {
 		prof := cfg.Profiles[profileName]
 		for _, t := range prof.Dotfiles {
-			if t.Dest == name {
-				fmt.Fprintf(out, "nestor: dotfile %s already in profile %s (src: %s)\n", name, profileName, t.Src)
+			// Same expanded-shape rule as the base dup check above.
+			if t.Dest == name || pathutil.SamePath(t.Dest, name, home) {
+				fmt.Fprintf(out, "nestor: dotfile %s already in profile %s (src: %s) — same file as %s\n", name, profileName, t.Src, t.Dest)
 				return nil
 			}
 		}
 		for _, t := range cfg.Dotfiles.Templates {
-			if t.Dest == name {
+			if t.Dest == name || pathutil.SamePath(t.Dest, name, home) {
 				fmt.Fprintf(out, "nestor: warning: dotfile %s overrides the base template (%s) — profile deploys last and wins\n", name, t.Src)
 				break
 			}
@@ -214,8 +215,11 @@ func addDotfile(name, profileName string, out io.Writer) error {
 		return nil
 	}
 	for _, t := range cfg.Dotfiles.Templates {
-		if t.Dest == name {
-			fmt.Fprintf(out, "nestor: dotfile %s already in config (src: %s)\n", name, t.Src)
+		// Same file, different spelling ("~/.bashrc" vs the absolute form):
+		// the raw compare let both entries coexist and two templates deployed
+		// to one dest last-wins.
+		if t.Dest == name || pathutil.SamePath(t.Dest, name, home) {
+			fmt.Fprintf(out, "nestor: dotfile %s already in config (src: %s) — same file as %s\n", name, t.Src, t.Dest)
 			return nil
 		}
 	}

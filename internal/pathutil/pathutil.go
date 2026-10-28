@@ -78,6 +78,16 @@ func IsManagedDotfileDest(path string, dests []string, home string) bool {
 	return false
 }
 
+// SamePath reports whether two dest spellings refer to the same file,
+// comparing in the expanded shape so "~/.bashrc" and the absolute path
+// collide. Duplicate detection keyed on raw strings let both spellings
+// coexist: validate passed, two templates deployed to one file last-wins,
+// and the first deploy re-spelled the second entry's dest. Shared by config
+// validation, 'nestor add' duplicate checks, and sync's merge dedup.
+func SamePath(a, b, home string) bool {
+	return ExpandHome(a, home) == ExpandHome(b, home)
+}
+
 // ResolveHome expands a leading "~" or "~/..." against home and rejects the
 // "~user/..." form. When home is empty (the lookup failed) any tilde form is
 // refused instead of passing through: a dest like "~/.bashrc" written

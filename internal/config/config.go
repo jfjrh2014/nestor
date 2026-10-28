@@ -200,12 +200,17 @@ func (c *Config) validate() error {
 	}
 
 	// Duplicate destinations cause two templates to overwrite each other.
+	// Compared in the expanded shape: "~/.bashrc" and the absolute form are
+	// the same file, and letting both spellings coexist means two templates
+	// deploy to one dest last-wins (and the first deploy re-spells the other
+	// entry's dest through the tilde boundary).
 	dup := make(map[string]bool)
 	for _, t := range c.Dotfiles.Templates {
-		if dup[t.Dest] {
-			return fmt.Errorf("dotfiles.templates: duplicate dest %q", t.Dest)
+		key := pathutil.ExpandHome(t.Dest, home)
+		if dup[key] {
+			return fmt.Errorf("dotfiles.templates: duplicate dest %q (same file as another entry once expanded)", t.Dest)
 		}
-		dup[t.Dest] = true
+		dup[key] = true
 	}
 
 	// Validate secret mappings: key non-empty, inject targets non-empty and
@@ -243,10 +248,11 @@ func (c *Config) validate() error {
 			if pathutil.IsOtherUserTilde(t.Dest) {
 				return fmt.Errorf("profiles.%s.dotfiles[%d]: dest %q uses the ~user/... form, which nestor does not expand (it would deploy into your own home)", name, i, t.Dest)
 			}
-			if pdup[t.Dest] {
-				return fmt.Errorf("profiles.%s.dotfiles: duplicate dest %q", name, t.Dest)
+			pkey := pathutil.ExpandHome(t.Dest, home)
+			if pdup[pkey] {
+				return fmt.Errorf("profiles.%s.dotfiles: duplicate dest %q (same file as another entry once expanded)", name, t.Dest)
 			}
-			pdup[t.Dest] = true
+			pdup[pkey] = true
 			if err := checkTemplateDestAgainstInject(t.Dest, fmt.Sprintf("profiles.%s.dotfiles[%d]", name, i), c, home); err != nil {
 				return err
 			}

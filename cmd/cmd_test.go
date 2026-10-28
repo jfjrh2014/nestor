@@ -201,10 +201,18 @@ func TestMergeDotfiles(t *testing.T) {
 			src:  []config.Template{dotfile("~/.vimrc"), dotfile("~/.vimrc")},
 			want: []string{"~/.bashrc", "~/.vimrc"},
 		},
+		{
+			// "~/.bashrc" and the absolute spelling are the same file: merging
+			// both leaves two templates deploying to one dest last-wins.
+			name: "skips tilde vs absolute spelling of the same dest",
+			dst:  []config.Template{dotfile("~/.bashrc")},
+			src:  []config.Template{dotfile("/home/tester/.bashrc"), dotfile("~/.vimrc")},
+			want: []string{"~/.bashrc", "~/.vimrc"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mergeDotfiles(tt.dst, tt.src)
+			got := mergeDotfiles(tt.dst, tt.src, "/home/tester")
 			if len(got) != len(tt.want) {
 				t.Fatalf("len = %d, want %d", len(got), len(tt.want))
 			}

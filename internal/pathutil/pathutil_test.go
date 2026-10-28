@@ -99,3 +99,27 @@ func TestResolveHome(t *testing.T) {
 		t.Errorf("error text = %q, want home-unavailable reason", err)
 	}
 }
+
+func TestSamePath(t *testing.T) {
+	home := string(filepath.Separator) + filepath.Join("home", "tester")
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"tilde vs absolute same file", "~/.bashrc", home + "/.bashrc", true},
+		{"absolute vs tilde reversed", home + "/.bashrc", "~/.bashrc", true},
+		{"identical tilde forms", "~/.bashrc", "~/.bashrc", true},
+		{"different files", "~/.bashrc", "~/.zshrc", false},
+		{"plain relative vs tilde", ".bashrc", "~/.bashrc", false},
+		{"empty paths", "", "", true},
+		{"empty vs nonempty", "", "~/.bashrc", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SamePath(tt.a, tt.b, home); got != tt.want {
+				t.Errorf("SamePath(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
