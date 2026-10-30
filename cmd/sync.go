@@ -128,6 +128,25 @@ func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
 	}
 	if existing != nil {
 		p.Warn(fmt.Sprintf("config already exists at %s — merging", outPath))
+		// A scanned dotfile whose dest is a declared secret inject target (base
+		// or profile layer) or this nestor's live config must not be merged:
+		// deploying the template overwrites the injected value (templates render
+		// with no secret data) or rewrites the config driving the run — the same
+		// corruption validate() refuses at load time. The capture-side skip maps
+		// only know base template dests, so an inject-target dest sailed through
+		// the merge and landed in the config unvalidated (probed with the pre-fix
+		// binary: sync reported success, then every config-loading command
+		// refused nestor's own sync output until the user hand-edited it).
+		kept := make([]config.Template, 0, len(foundDots))
+		for _, t := range foundDots {
+			if isLiveConfigPath(t.Dest, home) ||
+				pathutil.IsManagedDotfileDest(t.Dest, existing.InjectTargetDests(), home) {
+				p.Warn(fmt.Sprintf("skipping dotfile %s (dest %s): declared secret inject target — capturing it would let 'nestor up' overwrite the injected value", t.Src, t.Dest))
+				continue
+			}
+			kept = append(kept, t)
+		}
+		foundDots = kept
 		skippedBase := applyScanToConfig(existing, profileName, foundPkgs, foundDots, home)
 		if skippedBase > 0 {
 			p.Info(fmt.Sprintf("skipped %d base-managed item(s) already in the common sections (profiles hold machine-specific extras only)", skippedBase))
@@ -165,13 +184,13 @@ func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
 		}
 	}
 
-	data, err := config.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("sync: %w", err)
-	}
-
-	if writeErr := fsutil.WriteFileSync(outPath, data, 0o644); writeErr != nil {
-		return fmt.Errorf("sync: %w", writeErr)
+	// Validate the merged config before it replaces the file — the same belt
+	// the import merge carries. Every config-writing path must refuse the
+	// merge product the next Load would refuse: a merge that passes the skip
+	// logic but fails validate must leave the existing file byte-for-byte
+	// intact, not land a config that bricks the next command.
+	if err := writeValidatedConfig(cfg, outPath); err != nil {
+		return err
 	}
 	if profileName != "" {
 		p.OK(fmt.Sprintf("config written to %s (scanned items captured into profile %s)", outPath, profileName))
@@ -232,6 +251,23 @@ func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []strin
 	cfg.Packages.Common = mergeStrings(cfg.Packages.Common, foundPkgs)
 	cfg.Dotfiles.Templates = mergeDotfiles(cfg.Dotfiles.Templates, foundDots, home)
 	return 0
+}
+
+// writeValidatedConfig validates cfg, serializes it and replaces the file at
+// path durably. A validation failure leaves any existing file byte-for-byte
+// intact — sync must never land a config the next config.Load refuses.
+func writeValidatedConfig(cfg *config.Config, path string) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("sync: merged config is invalid, refusing to overwrite %s: %w", path, err)
+	}
+	data, err := config.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("sync: %w", err)
+	}
+	if err := fsutil.WriteFileSync(path, data, 0o644); err != nil {
+		return fmt.Errorf("sync: %w", err)
+	}
+	return nil
 }
 
 // loadExistingForSync returns the parsed existing config at path, or nil when

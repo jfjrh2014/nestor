@@ -9,6 +9,7 @@ import (
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/packages"
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 )
 
 func TestCopyDotfileTemplates(t *testing.T) {
@@ -652,5 +653,123 @@ func TestCopyFileSyncedFailedCopyKeepsDest(t *testing.T) {
 	litter, _ := filepath.Glob(filepath.Join(dir, ".nestor-*"))
 	if len(litter) != 0 {
 		t.Errorf("temp litter left behind: %v", litter)
+	}
+}
+
+// TestSyncSkipsScannedDotfileOnInjectTarget is the session #131 regression:
+// 'nestor sync' merged a scanned dotfile whose dest is a declared secret
+// inject target straight into the existing config — the skip maps only know
+// base template dests, so a mapping injecting into ~/.bashrc plus a .bashrc
+// on disk produced a config validate() refuses. Probed with the pre-fix
+// binary: sync reported success, and every config-loading command (up,
+// doctor, diff) then refused nestor's own sync output — the user had to
+// hand-edit nestor.yml to recover. The scanned file must be skipped with a
+// warning, the merged config stay loadable, and no template be materialized
+// for the refused dest.
+func TestSyncSkipsScannedDotfileOnInjectTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfgDir := filepath.Join(home, ".config", "nestor")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(cfgDir, "nestor.yml")
+	cfgContent := `version: 1
+dotfiles:
+  source: ` + filepath.Join(home, "dotfiles") + `
+  strategy: copy
+secrets:
+  provider: env
+  mappings:
+    - key: GITHUB_TOKEN
+      inject:
+        "~/.bashrc": "^export GITHUB_TOKEN="
+`
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	// Seed the dotfile sync will scan up — its dest collides with the inject target.
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export EDITOR=vim\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	if err := runSyncOut(context.Background(), "", &out); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !strings.Contains(out.String(), "inject target") {
+		t.Errorf("sync should warn about the skipped inject-target dotfile, got:\n%s", out.String())
+	}
+
+	// The merged config must still load — and must not contain the .bashrc template.
+	merged, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("merged config does not load: %v", err)
+	}
+	for _, tmpl := range merged.Dotfiles.Templates {
+		if tmpl.Dest == "~/.bashrc" {
+			t.Errorf("inject-target dest was captured as a template: %+v", merged.Dotfiles.Templates)
+		}
+	}
+	if len(merged.Secrets.Mappings) != 1 || merged.Secrets.Mappings[0].Key != "GITHUB_TOKEN" {
+		t.Errorf("existing mapping lost in the merge: %+v", merged.Secrets.Mappings)
+	}
+
+	// No template materialized for the refused dest.
+	if _, err := os.Stat(filepath.Join(home, "dotfiles", ".bashrc.tmpl")); err == nil {
+		t.Error("template was materialized for the refused dest")
+	}
+	_ = before
+}
+
+// TestSyncSkipsScannedDotfileOnLiveConfigPath pins the other half: a scanned
+// dotfile whose dest is the live config path (XDG or --config) must be
+// skipped, not merged — a template over nestor.yml rewrites the config
+// driving every command on the next 'up'.
+func TestSyncSkipsScannedDotfileOnLiveConfigPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfgDir := filepath.Join(home, ".config", "nestor")
+	if err := os.MkdirAll(filepath.Join(cfgDir, "nvim"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(cfgDir, "nestor.yml")
+	if err := os.WriteFile(cfgPath, []byte("version: 1\ndotfiles:\n  strategy: copy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	// .config/nvim/init.vim is in commonDotfiles; its dest is ~/.config/nvim/init.vim.
+	// Point the live config at it via cfgFile? No — isLiveConfigPath compares
+	// against configPath(), which resolves to the XDG file. Seed the config-dir
+	// dest instead: a template whose dest IS nestor.yml can only arise through
+	// a custom scan, so exercise isLiveConfigPath through the unit-level helper
+	// on the XDG config path spelling.
+	dest := "~/.config/nestor/nestor.yml"
+	if !isLiveConfigPath(dest, home) {
+		t.Fatalf("isLiveConfigPath should match the XDG config path, dest=%s", dest)
+	}
+
+	// And the profile-layer mapping is refused too: IsManagedDotfileDest over
+	// InjectTargetDests must catch a mapping declared in a profile.
+	cfg := config.Config{
+		Version: 1,
+		Profiles: map[string]config.Profile{
+			"work": {SecretMappings: []config.Mapping{{Key: "AWS_KEY", Inject: map[string]string{"~/.bashrc": "^export AWS_KEY="}}}},
+		},
+	}
+	if !pathutil.IsManagedDotfileDest("~/.bashrc", cfg.InjectTargetDests(), home) {
+		t.Error("profile-layer inject target not seen by InjectTargetDests")
 	}
 }
