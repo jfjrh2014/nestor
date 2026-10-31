@@ -291,7 +291,7 @@ func TestPushPullCrossMachineBranchAlignment(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfgPath := filepath.Join(os.Getenv("HOME"), ".config", "nestor", "nestor.yml")
-	if err := os.WriteFile(cfgPath, []byte("config: FROM-A\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("version: 1\nnote: FROM-A\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	pushRemoteURL = remote
@@ -301,7 +301,7 @@ func TestPushPullCrossMachineBranchAlignment(t *testing.T) {
 		t.Fatalf("push from machine A: %v\n%s", err, bufA.String())
 	}
 	// First pusher wins: the remote holds exactly one branch, masterlocal.
-	if out, err := exec.Command("git", "-C", remote, "show", "masterlocal:nestor.yml").Output(); err != nil || strings.TrimSpace(string(out)) != "config: FROM-A" {
+	if out, err := exec.Command("git", "-C", remote, "show", "masterlocal:nestor.yml").Output(); err != nil || strings.TrimSpace(string(out)) != "version: 1\nnote: FROM-A" {
 		t.Errorf("remote masterlocal should hold A's config (got %q, err %v)", string(out), err)
 	}
 	// ...and no phantom second branch: the silent-fork symptom.
@@ -325,7 +325,7 @@ func TestPushPullCrossMachineBranchAlignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pulled config missing on B: %v", err)
 	}
-	if strings.TrimSpace(string(data)) != "config: FROM-A" {
+	if strings.TrimSpace(string(data)) != "version: 1\nnote: FROM-A" {
 		t.Errorf("B pulled %q, want A's config", string(data))
 	}
 	if ref, err := exec.Command("git", "-C", filepath.Join(os.Getenv("HOME"), ".config", "nestor"), "symbolic-ref", "--short", "HEAD").Output(); err != nil || strings.TrimSpace(string(ref)) != "masterlocal" {
@@ -333,7 +333,7 @@ func TestPushPullCrossMachineBranchAlignment(t *testing.T) {
 	}
 
 	// B edits and pushes; then the remote must hold B's edit (round trip).
-	if err := os.WriteFile(bCfgPath, []byte("config: FROM-B\n"), 0o644); err != nil {
+	if err := os.WriteFile(bCfgPath, []byte("version: 1\nnote: FROM-B\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	pushRemoteURL = remote
@@ -341,7 +341,7 @@ func TestPushPullCrossMachineBranchAlignment(t *testing.T) {
 	if err := runPushOut(ctx, &bufB2); err != nil {
 		t.Fatalf("push from machine B: %v\n%s", err, bufB2.String())
 	}
-	if out, err := exec.Command("git", "-C", remote, "show", "masterlocal:nestor.yml").Output(); err != nil || strings.TrimSpace(string(out)) != "config: FROM-B" {
+	if out, err := exec.Command("git", "-C", remote, "show", "masterlocal:nestor.yml").Output(); err != nil || strings.TrimSpace(string(out)) != "version: 1\nnote: FROM-B" {
 		t.Errorf("remote masterlocal should hold B's edit (got %q, err %v)", string(out), err)
 	}
 }

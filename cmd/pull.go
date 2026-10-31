@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/ui"
 	"github.com/jfjrh2014/nestor/internal/vcs"
 	"github.com/spf13/cobra"
@@ -92,6 +93,17 @@ func runPullOut(ctx context.Context, w io.Writer) error {
 	}
 
 	p.OK("pulled latest config from remote")
+
+	// A remote (or an older nestor, or a hand edit pushed by mistake) can
+	// carry a config validate() refuses — a self-inject mapping, a duplicate
+	// dest, a dest on the live config. Refusing right here leaves the merge
+	// committed but inspectable, instead of surfacing later as "every
+	// command bricks" from a load that can never succeed.
+	live := configPath()
+	if _, err := config.Load(live); err != nil {
+		return fmt.Errorf("pulled config is invalid — see %s (revert with 'git -C %s reset --hard ORIG_HEAD' if the previous state was fine): %w", live, dir, err)
+	}
+
 	p.Info("run 'nestor up' to apply any changes")
 	return nil
 }
