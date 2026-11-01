@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/dotfiles"
@@ -188,13 +187,11 @@ func runUp(ctx context.Context) error {
 		home, _ := os.UserHomeDir()
 		for _, dest := range cfg.InjectTargetDests() {
 			if resolved, err := pathutil.ResolveHome(dest, home); err == nil && resolved != "" {
-				protected = append(protected, resolved)
+				protected = append(protected, pathutil.CanonicalDest(resolved, home))
 			}
 		}
 		if live := configPath(); live != "" {
-			if abs, err := filepath.Abs(live); err == nil {
-				protected = append(protected, abs)
-			}
+			protected = append(protected, pathutil.CanonicalDest(live, home))
 		}
 
 		deployer := dotfiles.Deployer{Strategy: strategy, Source: source, ProtectedDests: protected}

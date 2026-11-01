@@ -98,7 +98,7 @@ func (d Deployer) Deploy(t Template) Result {
 	// guard mirrors injectOne's self-inject guard — it covers configs
 	// written by hand or by an older nestor that never validated.
 	for _, protected := range d.ProtectedDests {
-		if dest == protected {
+		if pathutil.CanonicalDest(dest, currentHome()) == pathutil.CanonicalDest(protected, currentHome()) {
 			return Result{Template: t, Status: StatusError, Err: fmt.Errorf("dest %q is a protected destination (secret inject target or nestor's own config); refusing to deploy over it", t.Dest)}
 		}
 	}

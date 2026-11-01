@@ -892,3 +892,42 @@ func TestValidateRejectsProfileDuplicateDestinationsExpandedShape(t *testing.T) 
 		t.Fatal("expected error for profile duplicate dest in tilde vs absolute spelling")
 	}
 }
+
+// TestValidateRejectsDuplicateDestUncleanSpellings: the duplicate-dest check
+// once keyed on the ExpandHome-only string, so "~/.bashrc" and a
+// traversal-spelled spelling of the same file passed as two templates for
+// one file (probed 2026-11-01). Both spellings must collide once cleaned.
+func TestValidateRejectsDuplicateDestUncleanSpellings(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Dotfiles: Dotfiles{
+			Strategy: "copy",
+			Templates: []Template{
+				{Src: "a.tmpl", Dest: "~/.zshrc"},
+				{Src: "b.tmpl", Dest: "~/.zshrc/../.zshrc"},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for duplicate dest spelled with .. traversal")
+	}
+	if !strings.Contains(err.Error(), "duplicate dest") {
+		t.Fatalf("expected duplicate-dest error, got %v", err)
+	}
+
+	prof := &Config{
+		Version: 1,
+		Profiles: map[string]Profile{
+			"work": {
+				Dotfiles: []Template{
+					{Src: "a.tmpl", Dest: "~/.zshrc"},
+					{Src: "b.tmpl", Dest: "~/.zshrc/../.zshrc"},
+				},
+			},
+		},
+	}
+	if err := prof.Validate(); err == nil {
+		t.Fatal("expected error for duplicate profile dest spelled with .. traversal")
+	}
+}

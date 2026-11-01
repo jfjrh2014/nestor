@@ -54,9 +54,8 @@ func IsSelfInject(path, home string) bool {
 	if path == "" {
 		return false
 	}
-	expanded := ExpandHome(path, home)
-	target := filepath.Join(home, ".config", "nestor", "nestor.yml")
-	return expanded == target
+	target := CanonicalDest(filepath.Join(home, ".config", "nestor", "nestor.yml"), home)
+	return CanonicalDest(path, home) == target
 }
 
 // IsManagedDotfileDest reports whether path equals one of the given
@@ -69,23 +68,47 @@ func IsManagedDotfileDest(path string, dests []string, home string) bool {
 	if path == "" || len(dests) == 0 {
 		return false
 	}
-	expanded := ExpandHome(path, home)
+	canonical := CanonicalDest(path, home)
 	for _, d := range dests {
-		if ExpandHome(d, home) == expanded {
+		if CanonicalDest(d, home) == canonical {
 			return true
 		}
 	}
 	return false
 }
 
+// CanonicalDest normalizes a destination spelling for IDENTITY comparisons
+// only — never for writing. It expands the tilde form (same rule as
+// ExpandHome), cleans "./" and ".." segments, and makes the result absolute
+// against the current directory, so "~/.bashrc", "/home/u/.bashrc",
+// "/home/u/./.bashrc" and "/home/u/../u/.bashrc" all collapse to one shape.
+// Raw-string or ExpandHome-only comparisons let "./"-spelled and traversal-
+// spelled dests dodge duplicate detection and the protected-dest guards:
+// validate() accepted two templates for one file, and an engine guard missed
+// an inject target spelled "./nestor.yml" (probed 2026-11-01). Abs failure
+// (cwd unavailable) falls back to the cleaned form. All identity helpers
+// (SamePath, IsSelfInject, IsManagedDotfileDest) and every guard key on this.
+func CanonicalDest(path, home string) string {
+	if path == "" {
+		return ""
+	}
+	expanded := ExpandHome(path, home)
+	cleaned := filepath.Clean(expanded)
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		return abs
+	}
+	return cleaned
+}
+
 // SamePath reports whether two dest spellings refer to the same file,
-// comparing in the expanded shape so "~/.bashrc" and the absolute path
-// collide. Duplicate detection keyed on raw strings let both spellings
-// coexist: validate passed, two templates deployed to one file last-wins,
-// and the first deploy re-spelled the second entry's dest. Shared by config
-// validation, 'nestor add' duplicate checks, and sync's merge dedup.
+// compared in the canonical shape so "~/.bashrc", the absolute form, and
+// "/home/u/./.bashrc" collide. Duplicate detection keyed on raw strings let
+// both spellings coexist: validate passed, two templates deployed to one
+// file last-wins, and the first deploy re-spelled the second entry's dest.
+// Shared by config validation, 'nestor add' duplicate checks, and sync's
+// merge dedup.
 func SamePath(a, b, home string) bool {
-	return ExpandHome(a, home) == ExpandHome(b, home)
+	return CanonicalDest(a, home) == CanonicalDest(b, home)
 }
 
 // ResolveHome expands a leading "~" or "~/..." against home and rejects the

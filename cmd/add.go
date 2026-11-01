@@ -398,11 +398,7 @@ func isLiveConfigPath(dest, home string) bool {
 		return true
 	}
 	if live := configPath(); live != "" {
-		expanded := pathutil.ExpandHome(dest, home)
-		if absDest, absErr := filepath.Abs(dest); absErr == nil {
-			expanded = expanded + "\x00" + absDest
-		}
-		if strings.Contains("\x00"+expanded+"\x00", "\x00"+live+"\x00") {
+		if pathutil.CanonicalDest(dest, home) == pathutil.CanonicalDest(live, home) {
 			return true
 		}
 	}

@@ -1695,3 +1695,67 @@ func TestDeployAllRefusesProtectedDest(t *testing.T) {
 		t.Fatalf("protected dest was modified: %q", got)
 	}
 }
+
+// TestDeployRefusesProtectedDestUncleanSpelling: the engine guard compared
+// the resolved dest to each protected path as raw strings, so a protected
+// dest spelled "/abs/dir/./app.conf" (or with .. segments) dodged a template
+// whose dest is the same file spelled cleanly — deploy overwrote the
+// injected value (probed 2026-11-01). Both spellings must collide once
+// canonicalized. Mirrors the validate() unclean-spelling fix at the engine
+// layer: a hand-edited or old-nestor config never sees validate().
+func TestDeployRefusesProtectedDestUncleanSpelling(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	src := filepath.Join(dir, "gitconfig.tmpl")
+	if err := os.WriteFile(src, []byte("[user]\n\tname = x\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	protectedDir := filepath.Join(dir, "target")
+	injectDest := filepath.Join(protectedDir, "app.conf")
+	if err := os.MkdirAll(protectedDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(injectDest, []byte("token: injected-value\n"), 0o600); err != nil {
+		t.Fatalf("write inject dest: %v", err)
+	}
+
+	// Same file, protected list carries the unclean spelling.
+	unclean := filepath.Join(dir, "target") + "/./app.conf"
+	if unclean == injectDest {
+		t.Fatal("fixture: spelling unexpectedly identical")
+	}
+	d := Deployer{Strategy: StrategyCopy, Source: dir, ProtectedDests: []string{unclean}}
+	r := d.Deploy(Template{Src: "gitconfig.tmpl", Dest: injectDest})
+	if r.Status != StatusError {
+		t.Fatalf("expected StatusError for unclean protected spelling, got %s (err=%v)", r.Status, r.Err)
+	}
+	got, err := os.ReadFile(injectDest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "token: injected-value\n" {
+		t.Fatalf("protected dest was modified: %q", got)
+	}
+
+	// Mirror: template dest carries the redundant segment, protected list is
+	// clean. Also refused, dest untouched.
+	d2 := Deployer{Strategy: StrategyCopy, Source: dir, ProtectedDests: []string{injectDest}}
+	r2 := d2.Deploy(Template{Src: "gitconfig.tmpl", Dest: unclean})
+	if r2.Status != StatusError {
+		t.Fatalf("expected StatusError for unclean template dest, got %s (err=%v)", r2.Status, r2.Err)
+	}
+	got2, err := os.ReadFile(injectDest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got2) != "token: injected-value\n" {
+		t.Fatalf("protected dest was modified (mirror): %q", got2)
+	}
+	litter, err := filepath.Glob(filepath.Join(protectedDir, "*nestor-tmp*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(litter) != 0 {
+		t.Fatalf("temp files left behind: %v", litter)
+	}
+}

@@ -205,13 +205,8 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 	// mapping too; the guard here also covers configs written by hand or by
 	// an older nestor that never validated. ConfigPathFn is a test seam.
 	live := configPathFn()
-	if live != "" {
-		if absLive, absErr := filepath.Abs(live); absErr == nil {
-			live = absLive
-		}
-	}
-	destAbs, destAbsErr := filepath.Abs(dest)
-	if pathutil.IsSelfInject(dest, currentHome()) || (destAbsErr == nil && destAbs == live) {
+	destAbs := pathutil.CanonicalDest(dest, currentHome())
+	if pathutil.IsSelfInject(dest, currentHome()) || (live != "" && destAbs == pathutil.CanonicalDest(live, currentHome())) {
 		return InjectResult{Key: key, Dest: dest, Status: StatusError, Err: fmt.Errorf("dest %q is nestor's own config file; refusing to inject into it", dest)}
 	}
 

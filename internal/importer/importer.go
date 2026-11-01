@@ -10,6 +10,7 @@ import (
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/packages"
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 )
 
 // Result holds what was imported.
@@ -302,15 +303,21 @@ func MergeResult(cfg *config.Config, res *Result) int {
 		}
 	}
 
-	// dotfiles
+	// dotfiles, deduped by canonical dest (tilde/absolute/./ spellings of
+	// one file collide — raw-string keys let "./"-spelled dupes through, the
+	// same gap validate()'s duplicate check was closed for 2026-11-01).
+	home := ""
+	if h, err := osUserHomeDir(); err == nil {
+		home = h
+	}
 	existingDots := map[string]bool{}
 	for _, d := range cfg.Dotfiles.Templates {
-		existingDots[d.Dest] = true
+		existingDots[pathutil.CanonicalDest(d.Dest, home)] = true
 	}
 	for _, d := range res.Dotfiles {
-		if !existingDots[d.Dest] {
+		if !existingDots[pathutil.CanonicalDest(d.Dest, home)] {
 			cfg.Dotfiles.Templates = append(cfg.Dotfiles.Templates, d)
-			existingDots[d.Dest] = true
+			existingDots[pathutil.CanonicalDest(d.Dest, home)] = true
 			added++
 		}
 	}

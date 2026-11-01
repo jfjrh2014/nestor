@@ -423,10 +423,10 @@ func mergeDotfiles(dst, src []config.Template, home string) []config.Template {
 	}
 	seen := map[string]bool{}
 	for _, t := range dst {
-		seen[pathutil.ExpandHome(t.Dest, home)] = true
+		seen[pathutil.CanonicalDest(t.Dest, home)] = true
 	}
 	for _, t := range src {
-		key := pathutil.ExpandHome(t.Dest, home)
+		key := pathutil.CanonicalDest(t.Dest, home)
 		if !seen[key] {
 			dst = append(dst, t)
 			seen[key] = true

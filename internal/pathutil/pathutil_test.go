@@ -1,6 +1,7 @@
 package pathutil
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -121,5 +122,112 @@ func TestSamePath(t *testing.T) {
 				t.Errorf("SamePath(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCanonicalDest(t *testing.T) {
+	home := string(filepath.Separator) + filepath.Join("home", "tester")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"tilde", "~/.bashrc", filepath.Join(home, ".bashrc")},
+		{"dot spelling of tilde", "~/.config/./nestor/nestor.yml", filepath.Join(home, ".config", "nestor", "nestor.yml")},
+		{"traversal inside tilde", "~/x/../y/.zshrc", filepath.Join(home, "y", ".zshrc")},
+		{"relative dot", "./zshrc", filepath.Join(cwd, "zshrc")},
+		{"plain relative", "zshrc", filepath.Join(cwd, "zshrc")},
+		{"relative traversal", "a/../zshrc", filepath.Join(cwd, "zshrc")},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CanonicalDest(tt.in, home); got != tt.want {
+				t.Errorf("CanonicalDest(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+	// absolute passthrough with redundant segments
+	abs := home + "/.config/nestor/../nestor/nestor.yml"
+	if got := CanonicalDest(abs, home); got != filepath.Join(home, ".config", "nestor", "nestor.yml") {
+		t.Errorf("CanonicalDest(abs with ..) = %q", got)
+	}
+}
+
+func TestCanonicalDestIdentityCollapses(t *testing.T) {
+	home := string(filepath.Separator) + filepath.Join("home", "tester")
+	base := CanonicalDest("~/.bashrc", home)
+	for _, spelling := range []string{
+		"~/.bashrc",
+		home + "/.bashrc",
+		home + "/./.bashrc",
+		home + "/../" + filepath.Base(home) + "/.bashrc",
+	} {
+		if got := CanonicalDest(spelling, home); got != base {
+			t.Errorf("CanonicalDest(%q) = %q, want %q (same file as ~/.bashrc)", spelling, got, base)
+		}
+	}
+}
+
+func TestSamePathCanonicalSpellings(t *testing.T) {
+	home := string(filepath.Separator) + filepath.Join("home", "tester")
+	pairs := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"dot spelling", "~/.bashrc", home + "/./.bashrc", true},
+		{"traversal", "~/.bashrc", home + "/../tester/.bashrc", true},
+		{"relative and tilde are different files", ".bashrc", "~/.bashrc", false},
+		{"different files still differ", "~/.bashrc", "~/.zshrc", false},
+	}
+	for _, tt := range pairs {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SamePath(tt.a, tt.b, home); got != tt.want {
+				t.Errorf("SamePath(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsSelfInjectCanonicalSpellings(t *testing.T) {
+	home := string(filepath.Separator) + filepath.Join("home", "tester")
+	target := filepath.Join(home, ".config", "nestor", "nestor.yml")
+	spellings := []string{
+		"~/.config/nestor/nestor.yml",
+		target,
+		home + "/.config/nestor/./nestor.yml",
+		home + "/.config/nestor/../nestor/nestor.yml",
+	}
+	for _, s := range spellings {
+		if !IsSelfInject(s, home) {
+			t.Errorf("IsSelfInject(%q) = false, want true", s)
+		}
+	}
+	if IsSelfInject("~/.config/other/nestor.yml", home) {
+		t.Error("different file wrongly flagged as self-inject")
+	}
+}
+
+func TestIsManagedDotfileDestCanonicalSpellings(t *testing.T) {
+	home := string(filepath.Separator) + filepath.Join("home", "tester")
+	dests := []string{"~/.bashrc"}
+	forms := []string{
+		"~/.bashrc",
+		home + "/.bashrc",
+		home + "/./.bashrc",
+		home + "/../tester/.bashrc",
+	}
+	for _, f := range forms {
+		if !IsManagedDotfileDest(f, dests, home) {
+			t.Errorf("IsManagedDotfileDest(%q) = false, want true", f)
+		}
+	}
+	if IsManagedDotfileDest("~/.zshrc", dests, home) {
+		t.Error("different file wrongly flagged as managed dest")
 	}
 }
