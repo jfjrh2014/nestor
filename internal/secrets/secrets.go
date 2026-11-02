@@ -272,10 +272,21 @@ func injectOne(key, val, dest, pattern string) InjectResult {
 	// along) rather than an in-place O_APPEND, so a crash or full disk can't
 	// leave a torn line behind. A fresh dest — a file that will hold a
 	// secret — is created 0600, not world-readable.
+	//
+	// A dest whose last line lacks the trailing newline gets one added first
+	// (same contract as WriteSourceBlock's append): without it the injected
+	// line is glued onto the user's last line ("export FOO=barexport
+	// GITHUB_TOKEN=..."), the anchor then matches that glued line, and every
+	// later rotation appends another glued line instead of replacing in
+	// place (probed).
 	line := resolved + "\n"
 	content := line
 	if readErr == nil && len(data) > 0 {
-		content = string(data) + line
+		content = string(data)
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		content += line
 	}
 	perm, err := fsutil.WritePerm(dest, 0o600)
 	if err != nil {

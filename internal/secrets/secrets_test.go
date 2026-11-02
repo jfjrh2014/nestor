@@ -1128,3 +1128,47 @@ func TestSetConfigPathFnNilRestoresDefault(t *testing.T) {
 		t.Fatalf("nil restore: configPathFn() = %q, want %q", got, want)
 	}
 }
+
+// TestInjectOneAppendsAfterLineWithoutTrailingNewline: a dest whose last
+// line lacks the trailing newline ("export FOO=bar", no \n) had the injected
+// line glued onto it on first injection — "export FOO=barexport
+// GITHUB_TOKEN=..." — and because the anchor then matched the glued line,
+// every later injection (value rotation) appended another glued line
+// instead of replacing in place. The append branch must terminate the
+// dest's last line before appending; the user's bytes are preserved
+// verbatim apart from the added newline.
+func TestInjectOneAppendsAfterLineWithoutTrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "env.sh")
+	if err := os.WriteFile(dest, []byte("export FOO=bar"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := injectOne("github_token", "ghp_x", dest, "export GITHUB_TOKEN={{.Key}}")
+	if r.Status != StatusInjected {
+		t.Fatalf("want StatusInjected, got %s (%v)", r.Status, r.Err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "export FOO=bar\nexport GITHUB_TOKEN=ghp_x\n"
+	if string(data) != want {
+		t.Fatalf("dest = %q, want %q", string(data), want)
+	}
+
+	// Rotation replaces the anchored line in place — the previously
+	// newline-less file must not grow a second glued line on re-injection.
+	r = injectOne("github_token", "ghp_rotated", dest, "export GITHUB_TOKEN={{.Key}}")
+	if r.Status != StatusInjected {
+		t.Fatalf("rotation: want StatusInjected, got %s (%v)", r.Status, r.Err)
+	}
+	data, err = os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = "export FOO=bar\nexport GITHUB_TOKEN=ghp_rotated\n"
+	if string(data) != want {
+		t.Fatalf("dest after rotation = %q, want %q", string(data), want)
+	}
+}
