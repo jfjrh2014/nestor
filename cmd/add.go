@@ -131,14 +131,23 @@ func addDotfile(name, profileName string, out io.Writer) error {
 	}
 
 	// Resolve the path. The file must exist, so the resolution has to agree
-	// with what Stat can actually see: only the current user's home is
-	// expandable — "~root/.bashrc" stays literal (and therefore missing,
-	// which the check below turns into a loud refusal) rather than being
-	// silently re-rooted at the wrong home.
+	// with what Stat can actually see. Tilde forms resolve through
+	// pathutil.ResolveHome — the same rule the injector and every write
+	// boundary apply: the ~user/... form is refused up front instead of
+	// passing through to the not-found check, and an unavailable home
+	// lookup refuses any tilde dest instead of silently re-rooting it. The
+	// old filepath.Join(home, name[1:]) glued "~/.bashrc" to the filesystem
+	// root when the lookup failed (Join("", "/.bashrc") is "/.bashrc") and
+	// captured /.bashrc's content when that file happened to exist (probed
+	// 2026-11-03).
 	absPath := name
-	home, _ := os.UserHomeDir()
-	if name == "~" || strings.HasPrefix(name, "~/") {
-		absPath = filepath.Join(home, name[1:])
+	home := addDotfileHome()
+	if strings.HasPrefix(name, "~") {
+		resolved, resolveErr := pathutil.ResolveHome(name, home)
+		if resolveErr != nil {
+			return fmt.Errorf("add dotfile: %w", resolveErr)
+		}
+		absPath = resolved
 	} else if !filepath.IsAbs(name) {
 		absPath, _ = filepath.Abs(name)
 	}
@@ -332,6 +341,12 @@ var promptInjectHome = func() string {
 	}
 	return home
 }
+
+// addDotfileHome is promptInjectHome's counterpart for the add-dotfile path
+// resolution: "" when the lookup fails, overridable in tests. ResolveHome
+// refuses every tilde form against an empty home, which is the fix's
+// contract — never re-root a tilde dest at a guessed location.
+var addDotfileHome = promptInjectHome
 
 // promptInjectTarget asks the user for a dest path and template pattern for
 // the new secret. Both are optional — an empty line skips the target. The

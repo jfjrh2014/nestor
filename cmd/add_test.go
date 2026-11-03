@@ -768,8 +768,8 @@ func TestAddDotfileRefusesOtherUserTilde(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected refusal for ~user/... path, got nil")
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("error should say the source was not found, got: %v", err)
+	if !strings.Contains(err.Error(), "~user/... form") {
+		t.Errorf("error should refuse the ~user/... form up front, got: %v", err)
 	}
 	after, _ := os.ReadFile(cfgPath)
 	if string(before) != string(after) {
@@ -1159,5 +1159,82 @@ func TestAddDotfileProfileDuplicateAbsoluteSpelling(t *testing.T) {
 	}
 	if len(cfg.Profiles["work"].Dotfiles) != 1 {
 		t.Errorf("profile work dotfiles = %d entries, want 1", len(cfg.Profiles["work"].Dotfiles))
+	}
+}
+
+// TestAddDotfileRefusesTildeWhenHomeUnavailable pins the session #135
+// contract: tilde dests resolve through pathutil.ResolveHome, so when the
+// home lookup fails the add refuses up front. The pre-fix code did
+// filepath.Join(home, name[1:]) with an empty home, which glued the dest to
+// the filesystem root — "/.bashrc" — and captured that file's content into
+// the source dir when it happened to exist (probed 2026-11-03 with the
+// pre-fix binary: exit 0, /.bashrc copied to .bashrc.tmpl, dest: ~/.bashrc
+// recorded). The config must stay byte-for-byte unchanged and nothing
+// materialize.
+func TestAddDotfileRefusesTildeWhenHomeUnavailable(t *testing.T) {
+	// No root skip needed: the refusal fires inside ResolveHome BEFORE the
+	// source Stat, so the root user's see-everywhere Stat never runs.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	// Seam override: home lookup fails, exactly what an unset HOME yields.
+	orig := addDotfileHome
+	addDotfileHome = func() string { return "" }
+	defer func() { addDotfileHome = orig }()
+
+	before, _ := os.ReadFile(cfgPath)
+	var out bytes.Buffer
+	err := addDotfile("~/.bashrc", "", &out)
+	if err == nil {
+		t.Fatal("expected refusal for tilde dest with unavailable home, got nil")
+	}
+	if !strings.Contains(err.Error(), "home directory is unavailable") {
+		t.Errorf("error should refuse the tilde dest on the unavailable home, got: %v", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config file was modified despite the home-unavailable refusal")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "dotfiles", ".bashrc.tmpl")); statErr == nil {
+		t.Error("template materialized despite the home-unavailable refusal")
+	}
+}
+
+// TestAddDotfileTildeResolvesAgainstOverriddenHome pins the happy-path side
+// of the ResolveHome switch: with the seam reporting a known home, "~/.bashrc"
+// resolves there and the add captures THAT file — not a path glued from an
+// empty or guessed home.
+func TestAddDotfileTildeResolvesAgainstOverriddenHome(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	home := filepath.Join(dir, "myhome")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export REAL=home\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := addDotfileHome
+	addDotfileHome = func() string { return home }
+	defer func() { addDotfileHome = orig }()
+
+	var out bytes.Buffer
+	if err := addDotfile("~/.bashrc", "", &out); err != nil {
+		t.Fatalf("add dotfile failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "dotfiles", ".bashrc.tmpl"))
+	if err != nil {
+		t.Fatalf("template not materialized from the overridden home: %v", err)
+	}
+	if string(data) != "export REAL=home\n" {
+		t.Errorf("template captured wrong content, got: %q", string(data))
 	}
 }
