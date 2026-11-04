@@ -165,11 +165,22 @@ func addDotfile(name, profileName string, out io.Writer) error {
 	// nestor's own config would rewrite the config that drives it. Refuse
 	// here (before the template is materialized) instead of fossilizing a
 	// mapping in nestor.yml that bricks the next load.
-	home, _ = os.UserHomeDir()
+	//
+	// The home used for these identity comparisons must be the SAME home the
+	// dest was resolved against (addDotfileHome above): a fresh raw lookup
+	// here discarded the seam's value, so with HOME unavailable the guards
+	// compared a tilde-declared inject target against a cwd-canonicalized
+	// absolute dest and an absolute-spelled add of the same file sailed
+	// through (probed 2026-11-04: exit 0, mapping fossilized, every later
+	// deploy overwrites the injected value).
 	if isLiveConfigPath(name, home) {
 		return fmt.Errorf("add dotfile: dest %s is nestor's own config file — every deploy would rewrite the config that drives it", name)
 	}
-	if pathutil.IsManagedDotfileDest(name, cfg.InjectTargetDests(), home) {
+	collides, collideErr := collidesWithInjectTarget(name, cfg.InjectTargetDests(), home)
+	if collideErr != nil {
+		return fmt.Errorf("add dotfile: %w", collideErr)
+	}
+	if collides {
 		return fmt.Errorf("add dotfile: dest %s is a declared secret inject target — deploying the template overwrites the injected value", name)
 	}
 
@@ -386,8 +397,16 @@ func promptInjectTarget(name string, dotfileDests []string, in io.Reader, out io
 	// A managed dotfile dest loses the injected value on the next deploy:
 	// templates render with no secret data, so the overwrite is silent.
 	// The dotfile side of this pair is refused in config validate() and in
-	// addDotfile; this is the inject side (session #113).
-	if pathutil.IsManagedDotfileDest(dest, dotfileDests, promptInjectHome()) {
+	// addDotfile; this is the inject side (session #113). The comparison
+	// uses the same home ResolveHome above validated against — an unresolvable
+	// declared target is an error, never a silent miss (collidesWithInjectTarget).
+	home := promptInjectHome()
+	collides, collideErr := collidesWithInjectTarget(dest, dotfileDests, home)
+	if collideErr != nil {
+		fmt.Fprintf(out, "nestor: refusing inject target %s: %v\n", dest, collideErr)
+		return "", "", fmt.Errorf("invalid inject target %q: %w", dest, collideErr)
+	}
+	if collides {
 		fmt.Fprintf(out, "nestor: refusing inject target %s: it is a managed dotfile destination — the next deploy overwrites the injected value\n", dest)
 		return "", "", fmt.Errorf("invalid inject target %q: injecting into a managed dotfile destination is not allowed", dest)
 	}
@@ -401,6 +420,30 @@ func promptInjectTarget(name string, dotfileDests []string, in io.Reader, out io
 		pattern = defaultPattern
 	}
 	return dest, pattern, nil
+}
+
+// collidesWithInjectTarget reports whether dest is one of the declared
+// secret inject targets, compared in the canonical shape (SamePath). A
+// tilde-declared target the given home cannot resolve is an error, not a
+// miss: with the home lookup failing, CanonicalDest collapses "~/.config/..."
+// against the working directory, so an absolute-spelled add of the very file
+// the config injects into compared unequal and the guard silently let a
+// mapping through that every later deploy overwrites (probed 2026-11-04).
+// Refusing the comparison loudly mirrors the injector's own ResolveHome
+// contract — the target can't be validated, so nothing that touches it may
+// proceed.
+func collidesWithInjectTarget(dest string, targets []string, home string) (bool, error) {
+	for _, target := range targets {
+		if strings.HasPrefix(target, "~") {
+			if _, resolveErr := pathutil.ResolveHome(target, home); resolveErr != nil {
+				return false, fmt.Errorf("cannot compare dest with declared inject target %s: %w", target, resolveErr)
+			}
+		}
+		if pathutil.SamePath(dest, target, home) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // isLiveConfigPath reports whether dest refers to this nestor's live config

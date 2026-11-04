@@ -1238,3 +1238,124 @@ func TestAddDotfileTildeResolvesAgainstOverriddenHome(t *testing.T) {
 		t.Errorf("template captured wrong content, got: %q", string(data))
 	}
 }
+
+// TestAddDotfileRefusesUnresolvableInjectTarget pins the 2026-11-04 fix's
+// end-to-end shape: with the home lookup failing, the config declares
+// "~/.config/app/conf" as an inject target and the user adds that same file
+// spelled absolutely. The guard must refuse — it cannot prove the dest is
+// NOT the target — instead of silently missing the collision (the old code
+// discarded the seam's home for a raw lookup and canonicalized the tilde
+// target against the cwd, so the add sailed through and fossilized a mapping
+// every later deploy overwrites).
+func TestAddDotfileRefusesUnresolvableInjectTarget(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	content := `version: 1
+packages:
+  common: []
+dotfiles:
+  strategy: copy
+  templates: []
+secrets:
+  provider: env
+  mappings:
+    - key: app_token
+      inject:
+        "~/.config/app/conf": "token: {{.app_token}}"
+shells:
+  default: bash
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The dest exists as a real file: the source-existence check must not be
+	// what stops the add — the unresolvable-comparison refusal is.
+	target := filepath.Join(dir, "real-conf")
+	if err := os.WriteFile(target, []byte("token: secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	// Seam override: home lookup fails, exactly what an unset HOME yields.
+	orig := addDotfileHome
+	addDotfileHome = func() string { return "" }
+	defer func() { addDotfileHome = orig }()
+
+	before, _ := os.ReadFile(cfgPath)
+	var out bytes.Buffer
+	err := addDotfile(target, "", &out)
+	if err == nil {
+		t.Fatal("addDotfile: expected refusal when the declared inject target cannot be resolved, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot compare dest with declared inject target") {
+		t.Errorf("error = %v, want an unresolvable-target refusal", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Error("config was modified despite the unresolvable-target refusal")
+	}
+	if _, err := config.Load(cfgPath); err != nil {
+		t.Fatalf("config no longer loads after refused add: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "real-conf.tmpl")); !os.IsNotExist(err) {
+		t.Error("template materialized despite the unresolvable-target refusal")
+	}
+}
+
+// TestCollidesWithInjectTarget pins the helper's contract: tilde targets
+// compare against the real home, a target the home cannot resolve is an
+// error (never a silent miss), and disjoint dests stay accepted.
+func TestCollidesWithInjectTarget(t *testing.T) {
+	t.Run("absolute pair collides", func(t *testing.T) {
+		collides, err := collidesWithInjectTarget("/home/u/.bashrc", []string{"/home/u/./.bashrc"}, "/home/u")
+		if err != nil || !collides {
+			t.Fatalf("collides=%v err=%v, want true/nil", collides, err)
+		}
+	})
+	t.Run("tilde target vs absolute spelling collides", func(t *testing.T) {
+		collides, err := collidesWithInjectTarget("/home/u/.bashrc", []string{"~/.bashrc"}, "/home/u")
+		if err != nil || !collides {
+			t.Fatalf("collides=%v err=%v, want true/nil", collides, err)
+		}
+	})
+	t.Run("unresolvable tilde target errors", func(t *testing.T) {
+		_, err := collidesWithInjectTarget("/etc/motd", []string{"~/.bashrc"}, "")
+		if err == nil {
+			t.Fatal("expected error for unresolvable tilde target with empty home, got nil")
+		}
+		if !strings.Contains(err.Error(), "cannot compare dest with declared inject target") {
+			t.Errorf("error = %v, want the cannot-compare refusal", err)
+		}
+	})
+	t.Run("disjoint dests pass", func(t *testing.T) {
+		collides, err := collidesWithInjectTarget("/etc/motd", []string{"~/.bashrc"}, "/home/u")
+		if err != nil || collides {
+			t.Fatalf("collides=%v err=%v, want false/nil", collides, err)
+		}
+	})
+}
+
+// TestPromptInjectTargetRefusesUnresolvableDotfileDest pins the prompt side:
+// with the home lookup failing, a declared "~" dotfile dest cannot be compared
+// against the typed dest, so the prompt refuses instead of silently accepting
+// an inject target the guard could not check.
+func TestPromptInjectTargetRefusesUnresolvableDotfileDest(t *testing.T) {
+	orig := promptInjectHome
+	promptInjectHome = func() string { return "" }
+	defer func() { promptInjectHome = orig }()
+
+	var out bytes.Buffer
+	dest, pattern, perr := promptInjectTarget("tok", []string{"~/.bashrc"}, strings.NewReader("/etc/motd\nTOK={{.tok}}\n"), &out)
+	if perr == nil {
+		t.Fatal("expected refusal when the declared dotfile dest cannot be resolved, got nil")
+	}
+	if dest != "" || pattern != "" {
+		t.Fatalf("expected refused dest/pattern to be empty, got %q/%q", dest, pattern)
+	}
+	if !strings.Contains(out.String(), "cannot compare") || !strings.Contains(out.String(), "~/.bashrc") {
+		t.Errorf("expected unresolvable-dest refusal naming the target, got: %s", out.String())
+	}
+}
