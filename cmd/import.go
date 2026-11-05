@@ -89,7 +89,10 @@ func runImport(name, srcPath string, w io.Writer) error {
 	}
 
 	// Merge into config and write
-	added := importer.MergeResult(cfg, res)
+	added, mergeErr := importer.MergeResult(cfg, res)
+	if mergeErr != nil {
+		return fmt.Errorf("import: %w", mergeErr)
+	}
 	if added == 0 {
 		fmt.Fprintln(w, "nestor: nothing new to add (all items already in config)")
 		return nil

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // swapRunCommand replaces runCommand for the duration of the test.
@@ -284,7 +285,10 @@ func TestMergeResultEmptyConfig(t *testing.T) {
 		Dotfiles: []config.Template{{Src: ".vimrc.tmpl", Dest: "~/.vimrc"}},
 	}
 	cfg := &config.Config{}
-	added := MergeResult(cfg, res)
+	added, mergeErr := MergeResult(cfg, res)
+	if mergeErr != nil {
+		t.Fatalf("MergeResult: %v", mergeErr)
+	}
 	if added != 2 {
 		t.Errorf("added: got %d, want 2", added)
 	}
@@ -307,5 +311,58 @@ func TestYadmNotInstalled(t *testing.T) {
 	_, err := NewYadm()
 	if err == nil {
 		t.Error("expected error when yadm not in PATH, got nil")
+	}
+}
+
+func TestYadmImportRefusesHomeLookupFailure(t *testing.T) {
+	swapRunCommand(t, func(string, ...string) (string, error) {
+		return "/home/u/.bashrc\n/tmp/outside.txt\n", nil
+	})
+	origHome := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return "", errors.New("lookup failed") }
+	t.Cleanup(func() { osUserHomeDir = origHome })
+
+	y := &Yadm{}
+	res, err := y.Import()
+	if err == nil {
+		t.Fatalf("expected refusal on failed home lookup, got nil (dotfiles %+v)", res.Dotfiles)
+	}
+	if !strings.Contains(err.Error(), "resolving home directory") {
+		t.Errorf("error should name the home resolution failure, got: %v", err)
+	}
+	if res != nil && len(res.Dotfiles) != 0 {
+		t.Errorf("refusal must not produce dests, got %+v", res.Dotfiles)
+	}
+}
+
+func TestMergeResultHomeLookupFailure(t *testing.T) {
+	origHome := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return "", errors.New("lookup failed") }
+	t.Cleanup(func() { osUserHomeDir = origHome })
+
+	// Absolute-spelled entry already in the config; the import carries the
+	// tilde spelling of the same file. With an unresolvable home the
+	// canonical dedup cannot prove them equal, so the merge must refuse
+	// instead of adding both (two templates for one dest, last-wins).
+	res := &Result{
+		Dotfiles: []config.Template{{Src: ".bashrc.tmpl", Dest: "~/.bashrc"}},
+	}
+	cfg := &config.Config{
+		Dotfiles: config.Dotfiles{
+			Templates: []config.Template{{Src: ".bashrc.tmpl", Dest: "/home/u/.bashrc"}},
+		},
+	}
+	cfgBefore, _ := yaml.Marshal(cfg)
+
+	added, err := MergeResult(cfg, res)
+	if err == nil {
+		t.Fatalf("expected refusal on failed home lookup, got nil (added %d, templates %+v)", added, cfg.Dotfiles.Templates)
+	}
+	if !strings.Contains(err.Error(), "resolving home directory") {
+		t.Errorf("error should name the home resolution failure, got: %v", err)
+	}
+	cfgAfter, _ := yaml.Marshal(cfg)
+	if string(cfgBefore) != string(cfgAfter) {
+		t.Errorf("refusal must leave the config untouched:\nbefore:\n%s\nafter:\n%s", cfgBefore, cfgAfter)
 	}
 }

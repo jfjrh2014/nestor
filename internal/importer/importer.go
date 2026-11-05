@@ -252,7 +252,16 @@ func (y *Yadm) Import() (*Result, error) {
 	}
 
 	res := &Result{Source: "yadm"}
-	home, _ := osUserHomeDir()
+	// The "~/"-relative dests below only mean anything against the real
+	// home: a failed lookup would TrimPrefix("")+"/" off every absolute
+	// path, turning managed files into "~/home/u/..." and paths outside
+	// home (e.g. /tmp/...) into in-home dests "~/tmp/..." — mappings
+	// pointing at files that do not exist (probed 2026-11-05). Refuse
+	// loudly, same contract as the write boundaries (2026-10-10).
+	home, homeErr := osUserHomeDir()
+	if homeErr != nil {
+		return nil, fmt.Errorf("resolving home directory: %w", homeErr)
+	}
 
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
@@ -282,7 +291,11 @@ func (y *Yadm) Import() (*Result, error) {
 // parsed spec (manager canonicalized, name) so a legacy "homebrew: git"
 // entry from a pre-unification config doesn't duplicate beside the
 // importer's canonical "brew: git". Returns the count of new items added.
-func MergeResult(cfg *config.Config, res *Result) int {
+// A failed home lookup returns an error instead of degrading the canonical
+// dedup: with an empty home every tilde dest compares unexpanded, so a
+// "~/.bashrc" import beside the absolute-spelled entry in the config
+// merges as two files and two templates deploy to one dest last-wins.
+func MergeResult(cfg *config.Config, res *Result) (int, error) {
 	added := 0
 
 	// packages
@@ -305,10 +318,15 @@ func MergeResult(cfg *config.Config, res *Result) int {
 
 	// dotfiles, deduped by canonical dest (tilde/absolute/./ spellings of
 	// one file collide — raw-string keys let "./"-spelled dupes through, the
-	// same gap validate()'s duplicate check was closed for 2026-11-01).
-	home := ""
-	if h, err := osUserHomeDir(); err == nil {
-		home = h
+	// same gap validate()'s duplicate check was closed for 2026-11-01). Both
+	// sides must resolve against the same home: with "" every tilde dest
+	// compares unexpanded and a "~/.bashrc" import beside the absolute-
+	// spelled entry merges as two files (the last-wins deploy corruption
+	// CanonicalDest exists to prevent). Refuse loudly rather than merge
+	// degraded — same contract as Yadm.Import above.
+	home, homeErr := osUserHomeDir()
+	if homeErr != nil {
+		return 0, fmt.Errorf("merging import: resolving home directory: %w", homeErr)
 	}
 	existingDots := map[string]bool{}
 	for _, d := range cfg.Dotfiles.Templates {
@@ -322,5 +340,5 @@ func MergeResult(cfg *config.Config, res *Result) int {
 		}
 	}
 
-	return added
+	return added, nil
 }

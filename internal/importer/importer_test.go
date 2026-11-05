@@ -112,7 +112,10 @@ brew "neovim"
 		},
 	}
 
-	added := MergeResult(cfg, res)
+	added, mergeErr := MergeResult(cfg, res)
+	if mergeErr != nil {
+		t.Fatalf("MergeResult: %v", mergeErr)
+	}
 	if added != 1 {
 		t.Errorf("added: got %d, want 1 (neovim is new; legacy homebrew: git dedups against brew: git)", added)
 	}
@@ -220,7 +223,10 @@ func TestMergeResultDedup(t *testing.T) {
 		},
 	}
 
-	added := MergeResult(cfg, res)
+	added, mergeErr := MergeResult(cfg, res)
+	if mergeErr != nil {
+		t.Fatalf("MergeResult: %v", mergeErr)
+	}
 	if added != 2 { // neovim (pkg) + zshrc (dotfile)
 		t.Errorf("added: got %d, want 2", added)
 	}
