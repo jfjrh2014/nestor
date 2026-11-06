@@ -127,7 +127,8 @@ func runUp(ctx context.Context) error {
 	}
 
 	// Step 3: snapshot existing dotfiles before overwriting
-	destPaths := snapshotDestPaths(cfg, profileName)
+	home, _ := os.UserHomeDir()
+	destPaths := snapshotDestPaths(cfg, profileName, home)
 	if len(destPaths) > 0 {
 		snap, err := snapshot.Create(destPaths)
 		if err != nil {
@@ -168,7 +169,7 @@ func runUp(ctx context.Context) error {
 		profileTemps := cfg.ProfileDotfiles(profileName)
 		if len(profileTemps) > 0 {
 			p.OK(fmt.Sprintf("profile %s: %d extra dotfiles", profileName, len(profileTemps)))
-			for _, dest := range profileDotfileCollisions(cfg.Dotfiles.Templates, profileTemps) {
+			for _, dest := range profileDotfileCollisions(cfg.Dotfiles.Templates, profileTemps, home) {
 				p.Warn(fmt.Sprintf("profile %s dotfile %s overrides the base template — profile deploys last and wins", profileName, dest))
 			}
 			for _, t := range profileTemps {
@@ -184,7 +185,6 @@ func runUp(ctx context.Context) error {
 		// the engine unrefused: this is the last line of defense (mirrors
 		// injectOne's self-inject guard).
 		var protected []string
-		home, _ := os.UserHomeDir()
 		for _, dest := range cfg.InjectTargetDests() {
 			if resolved, err := pathutil.ResolveHome(dest, home); err == nil && resolved != "" {
 				protected = append(protected, pathutil.CanonicalDest(resolved, home))
@@ -281,18 +281,23 @@ func hasSecrets(base []config.Mapping, profile []config.Mapping) bool {
 // before a dotfile deploy in this run. It combines the base templates with any
 // profile-specific templates so that 'nestor rollback' can restore destinations
 // overwritten by a --profile deploy, not just the base ones. Deduplicates by
-// dest to avoid double-copying a file that appears in both lists.
-func snapshotDestPaths(cfg *config.Config, profile string) []string {
+// canonical dest (mixed tilde/absolute spellings of one file are one entry)
+// to avoid double-copying a file that appears in both lists.
+func snapshotDestPaths(cfg *config.Config, profile, home string) []string {
 	all := append([]config.Template{}, cfg.Dotfiles.Templates...)
 	all = append(all, cfg.ProfileDotfiles(profile)...)
 
 	seen := make(map[string]bool, len(all))
 	out := make([]string, 0, len(all))
 	for _, t := range all {
-		if seen[t.Dest] {
+		// Keyed on the canonical shape: a profile dest spelled absolute is
+		// the same file as the base tilde spelling (validate deliberately
+		// allows base-vs-profile dups), and the raw compare backed it up twice.
+		key := pathutil.CanonicalDest(t.Dest, home)
+		if seen[key] {
 			continue
 		}
-		seen[t.Dest] = true
+		seen[key] = true
 		out = append(out, t.Dest)
 	}
 	return out
@@ -301,14 +306,19 @@ func snapshotDestPaths(cfg *config.Config, profile string) []string {
 // profileDotfileCollisions returns the dests declared in both the base
 // templates and the profile layer — deliberate per-profile overrides that
 // the deploy path resolves in the profile's favor (profile deploys last).
-func profileDotfileCollisions(base, prof []config.Template) []string {
+// Compared in the canonical shape: mixed tilde/absolute spellings of one
+// file are the same override and must warn.
+func profileDotfileCollisions(base, prof []config.Template, home string) []string {
 	baseDests := make(map[string]bool, len(base))
 	for _, t := range base {
-		baseDests[t.Dest] = true
+		baseDests[pathutil.CanonicalDest(t.Dest, home)] = true
 	}
 	var out []string
 	for _, t := range prof {
-		if baseDests[t.Dest] {
+		// Canonical compare: the raw-string key missed a profile dest spelled
+		// absolute over a base tilde spelling — same file, override deployed
+		// silently, breaking the warn contract this helper exists for.
+		if baseDests[pathutil.CanonicalDest(t.Dest, home)] {
 			out = append(out, t.Dest)
 		}
 	}

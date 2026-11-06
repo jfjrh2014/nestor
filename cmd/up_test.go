@@ -179,7 +179,7 @@ func TestSnapshotDestPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := snapshotDestPaths(tt.cfg, tt.profile)
+			got := snapshotDestPaths(tt.cfg, tt.profile, "/home/tester")
 			if len(got) != len(tt.want) {
 				t.Fatalf("len = %d, want %d (%v)", len(got), len(tt.want), got)
 			}
@@ -319,7 +319,7 @@ func TestProfileDotfileCollisions(t *testing.T) {
 		{Src: "gitconfig.work.tmpl", Dest: "~/.gitconfig"}, // collision
 	}
 
-	got := profileDotfileCollisions(base, prof)
+	got := profileDotfileCollisions(base, prof, "/home/u")
 	want := []string{"~/.bashrc", "~/.gitconfig"}
 	if len(got) != len(want) {
 		t.Fatalf("collisions = %v, want %v", got, want)
@@ -330,7 +330,7 @@ func TestProfileDotfileCollisions(t *testing.T) {
 		}
 	}
 
-	if got := profileDotfileCollisions(base, []config.Template{{Src: "k.tmpl", Dest: "~/.config/kitty/kitty.conf"}}); len(got) != 0 {
+	if got := profileDotfileCollisions(base, []config.Template{{Src: "k.tmpl", Dest: "~/.config/kitty/kitty.conf"}}, "/home/u"); len(got) != 0 {
 		t.Errorf("no-overlap case returned %v, want none", got)
 	}
 }
@@ -432,5 +432,49 @@ func TestUpRefusesSelfInjectViaConfigFlag(t *testing.T) {
 	// The config still loads: no "key: value" line was appended to corrupt it.
 	if _, err := config.Load(cfgPath); err != nil {
 		t.Fatalf("config no longer loads after up: %v", err)
+	}
+}
+
+// TestProfileDotfileCollisionsMixedSpellings pins the canonical-dest keying:
+// a profile dest spelled absolute is the same file as the base tilde spelling,
+// and the override must warn — the raw-string compare (pre-2026-11-06) missed
+// it, deploying the profile template over the base one with no warning.
+func TestProfileDotfileCollisionsMixedSpellings(t *testing.T) {
+	home := "/home/u"
+	base := []config.Template{{Src: ".bashrc.tmpl", Dest: "~/.bashrc"}}
+	prof := []config.Template{
+		{Src: "bashrc.abs.tmpl", Dest: "/home/u/.bashrc"}, // same file, absolute spelling
+	}
+
+	got := profileDotfileCollisions(base, prof, home)
+	if len(got) != 1 || got[0] != "/home/u/.bashrc" {
+		t.Fatalf("collisions = %v, want the mixed-spelling ~/.bashrc override detected", got)
+	}
+
+	// Control: a genuinely different file is not a collision.
+	if got := profileDotfileCollisions(base, []config.Template{{Src: "other.tmpl", Dest: "/home/other/.bashrc"}}, home); len(got) != 0 {
+		t.Errorf("foreign-home dest reported as collision: %v", got)
+	}
+}
+
+// TestSnapshotDestPathsMixedSpellingsDedup pins the snapshot list dedup on the
+// canonical shape: base tilde + profile absolute spellings of one file must
+// collapse to a single entry (the first spelling), not back up the same file
+// twice.
+func TestSnapshotDestPathsMixedSpellingsDedup(t *testing.T) {
+	home := "/home/u"
+	cfg := &config.Config{
+		Version: 1,
+		Dotfiles: config.Dotfiles{
+			Templates: []config.Template{{Src: "a.tmpl", Dest: "~/.a"}},
+		},
+		Profiles: map[string]config.Profile{
+			"work": {Dotfiles: []config.Template{{Src: "a-abs.tmpl", Dest: "/home/u/.a"}}},
+		},
+	}
+
+	got := snapshotDestPaths(cfg, "work", home)
+	if len(got) != 1 || got[0] != "~/.a" {
+		t.Fatalf("dests = %v, want [~/.a] (first spelling kept)", got)
 	}
 }
