@@ -219,11 +219,17 @@ func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []strin
 		for _, p := range cfg.Packages.Common {
 			basePkgs[p] = true
 		}
-		// Keyed on the expanded shape: a base entry spelled with "~" and a
+		// Keyed on the canonical shape: a base entry spelled with "~" and a
 		// scan result spelled absolute are the same file and must dedup.
+		// Canonical, not ExpandHome-only: an ExpandHome key left a
+		// "./"-spelled scan result of a base dest as a different key, so the
+		// same file was captured into the profile as base (skipped once, with
+		// "./.bashrc" ALSO merged in as an extra) — double-deploying it and
+		// mutating the scan's declared shape (probed 2026-11-08). Same
+		// canonical rule every other dest identity map keys on (2026-11-01).
 		baseDests := make(map[string]bool, len(cfg.Dotfiles.Templates))
 		for _, t := range cfg.Dotfiles.Templates {
-			baseDests[pathutil.ExpandHome(t.Dest, home)] = true
+			baseDests[pathutil.CanonicalDest(t.Dest, home)] = true
 		}
 		skipped := 0
 		extraPkgs := make([]string, 0, len(foundPkgs))
@@ -236,7 +242,7 @@ func applyScanToConfig(cfg *config.Config, profileName string, foundPkgs []strin
 		}
 		extraDots := make([]config.Template, 0, len(foundDots))
 		for _, t := range foundDots {
-			if baseDests[pathutil.ExpandHome(t.Dest, home)] {
+			if baseDests[pathutil.CanonicalDest(t.Dest, home)] {
 				skipped++
 				continue
 			}

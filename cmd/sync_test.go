@@ -773,3 +773,75 @@ func TestSyncSkipsScannedDotfileOnLiveConfigPath(t *testing.T) {
 		t.Error("profile-layer inject target not seen by InjectTargetDests")
 	}
 }
+
+// TestSyncProfileCaptureSkipsCanonicalBaseDest: the base-skip map keyed on
+// ExpandHome, so a scan result spelling the base dest with a redundant
+// segment ("/home/tester/./.bashrc" over base "~/.bashrc") compared unequal
+// and the same file sailed through twice — the capture mislabeled a
+// base-managed dest as machine-specific (skipped = 0) and merged a second
+// template for the same dest into the profile: double-deployed under
+// --profile runs, scan shape mutated. First fixture used "./.bashrc", whose
+// canonical form depends on the CWD, not home — re-derived from the fixture
+// (2026-11-08).
+func TestSyncProfileCaptureSkipsCanonicalBaseDest(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Dotfiles: config.Dotfiles{
+			Source:   "/tmp/dotfiles",
+			Strategy: "copy",
+			Templates: []config.Template{
+				{Src: ".bashrc.tmpl", Dest: "~/.bashrc"},
+			},
+		},
+		Profiles: map[string]config.Profile{
+			"work": {},
+		},
+	}
+
+	skipped := applyScanToConfig(cfg, "work", nil,
+		[]config.Template{{Src: ".bashrc.tmpl", Dest: "/home/tester/./.bashrc"}},
+		"/home/tester",
+	)
+
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1 (redundant-segment spelling is the same file as base ~/.bashrc)", skipped)
+	}
+	if prof := cfg.Profiles["work"]; len(prof.Dotfiles) != 0 {
+		t.Errorf("profile work dotfiles = %v, want none (canonical same file as base)", prof.Dotfiles)
+	}
+	if len(cfg.Dotfiles.Templates) != 1 {
+		t.Errorf("base templates = %v, want untouched", cfg.Dotfiles.Templates)
+	}
+}
+
+// TestSyncProfileCaptureCanonicalDistinctDests pins the untouched path:
+// ./-spelling is only skipped when it canonically EQUALS a base dest — a
+// genuinely different dest spelled with ./ is captured normally.
+func TestSyncProfileCaptureCanonicalDistinctDests(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		Dotfiles: config.Dotfiles{
+			Source:   "/tmp/dotfiles",
+			Strategy: "copy",
+			Templates: []config.Template{
+				{Src: ".bashrc.tmpl", Dest: "~/.bashrc"},
+			},
+		},
+		Profiles: map[string]config.Profile{
+			"work": {},
+		},
+	}
+
+	skipped := applyScanToConfig(cfg, "work", nil,
+		[]config.Template{{Src: ".zshrc.tmpl", Dest: "./.zshrc"}},
+		"/home/tester",
+	)
+
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0 (.zshrc is a different dest)", skipped)
+	}
+	prof := cfg.Profiles["work"]
+	if len(prof.Dotfiles) != 1 || prof.Dotfiles[0].Dest != "./.zshrc" {
+		t.Errorf("profile work dotfiles = %v, want [{.zshrc.tmpl ./.zshrc}]", prof.Dotfiles)
+	}
+}
