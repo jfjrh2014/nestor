@@ -11,6 +11,7 @@ import (
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/dotfiles"
 	"github.com/jfjrh2014/nestor/internal/packages"
+	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"github.com/jfjrh2014/nestor/internal/secrets"
 )
 
@@ -82,18 +83,26 @@ func (r Report) WarnCount() int {
 // pass "" to skip template-source existence checks.
 func Validate(cfg *config.Config, dotfilesSource string) Report {
 	var findings []Finding
+	// Dest identity is compared in the canonical shape (config.validate's
+	// rule): "~/.bashrc" and the absolute spelling are one file. A failed
+	// lookup leaves home empty, which only weakens the tilde-vs-absolute
+	// match for these warnings; nothing here writes.
+	home, _ := homeFn()
 
 	findings = append(findings, validateConfig(cfg)...)
 	findings = append(findings, validatePackages(cfg)...)
-	findings = append(findings, validateDotfiles(cfg, dotfilesSource)...)
+	findings = append(findings, validateDotfiles(cfg, dotfilesSource, home)...)
 	findings = append(findings, validateSecrets(cfg)...)
-	findings = append(findings, validateProfiles(cfg, dotfilesSource)...)
+	findings = append(findings, validateProfiles(cfg, dotfilesSource, home)...)
 
 	return Report{
 		Findings: findings,
 		Passed:   len(findings) == 0 || !hasErrors(findings),
 	}
 }
+
+// homeFn is the home lookup used for dest identity; a seam for tests.
+var homeFn = os.UserHomeDir
 
 func hasErrors(findings []Finding) bool {
 	for _, f := range findings {
@@ -171,10 +180,10 @@ func validatePackages(cfg *config.Config) []Finding {
 	return out
 }
 
-func validateDotfiles(cfg *config.Config, source string) []Finding {
+func validateDotfiles(cfg *config.Config, source, home string) []Finding {
 	// Base layer first: templateFindings covers empty fields, duplicate and
 	// override dests, src existence, and render checks for .tmpl files.
-	return templateFindings("dotfiles", cfg.Dotfiles.Templates, source, map[string]bool{})
+	return templateFindings("dotfiles", cfg.Dotfiles.Templates, source, home, map[string]bool{})
 }
 
 func validateSecrets(cfg *config.Config) []Finding {
@@ -211,7 +220,7 @@ func validateSecrets(cfg *config.Config) []Finding {
 // dests, plus src existence when source is non-empty. prefix names the
 // section in messages (e.g. "dotfiles", "profile work"). destSeen accumulates
 // across calls so profile templates can be checked against base dests.
-func templateFindings(prefix string, tmpl []config.Template, source string, destSeen map[string]bool) []Finding {
+func templateFindings(prefix string, tmpl []config.Template, source, home string, destSeen map[string]bool) []Finding {
 	var out []Finding
 	layerSeen := map[string]bool{}
 	for _, t := range tmpl {
@@ -223,13 +232,17 @@ func templateFindings(prefix string, tmpl []config.Template, source string, dest
 			out = append(out, Finding{SeverityError, prefix, fmt.Sprintf("template dest %q has empty src", t.Dest)})
 			continue
 		}
-		if layerSeen[t.Dest] {
+		// Keyed on the canonical dest: a profile template spelled absolute
+		// over a base "~" dest is the same file, and the raw compare let the
+		// override pass 'nestor ci' with no warning.
+		key := pathutil.CanonicalDest(t.Dest, home)
+		if layerSeen[key] {
 			out = append(out, Finding{SeverityError, prefix, fmt.Sprintf("duplicate dest path %q", t.Dest)})
-		} else if destSeen[t.Dest] {
+		} else if destSeen[key] {
 			out = append(out, Finding{SeverityWarning, prefix, fmt.Sprintf("dest %q overrides a template from an earlier layer", t.Dest)})
 		}
-		layerSeen[t.Dest] = true
-		destSeen[t.Dest] = true
+		layerSeen[key] = true
+		destSeen[key] = true
 
 		if source != "" {
 			srcPath := t.Src
@@ -277,7 +290,7 @@ func mappingFindings(prefix string, mappings []config.Mapping) []Finding {
 	return out
 }
 
-func validateProfiles(cfg *config.Config, dotfilesSource string) []Finding {
+func validateProfiles(cfg *config.Config, dotfilesSource, home string) []Finding {
 	var out []Finding
 
 	for name, prof := range cfg.Profiles {
@@ -297,10 +310,10 @@ func validateProfiles(cfg *config.Config, dotfilesSource string) []Finding {
 		destSeen := map[string]bool{}
 		for _, t := range cfg.Dotfiles.Templates {
 			if t.Dest != "" {
-				destSeen[t.Dest] = true
+				destSeen[pathutil.CanonicalDest(t.Dest, home)] = true
 			}
 		}
-		out = append(out, templateFindings(prefix, prof.Dotfiles, dotfilesSource, destSeen)...)
+		out = append(out, templateFindings(prefix, prof.Dotfiles, dotfilesSource, home, destSeen)...)
 
 		// Profile secrets get the same per-mapping checks as base; they also
 		// need a provider, which the base branch only guards for base mappings.

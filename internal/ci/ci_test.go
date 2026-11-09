@@ -503,3 +503,55 @@ func TestValidateProfilesSecrets(t *testing.T) {
 		}
 	})
 }
+
+// A profile template spelled absolute over a base "~" dest is the same file:
+// the override must warn exactly like the same-spelling case (raw-string keys
+// let it pass 'nestor ci' silently).
+func TestValidateProfileOverrideMixedSpellingWarns(t *testing.T) {
+	home := t.TempDir()
+	old := homeFn
+	homeFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { homeFn = old })
+
+	for _, dest := range []string{home + "/.bashrc", home + "/./.bashrc"} {
+		cfg := &config.Config{
+			Version:  1,
+			Dotfiles: config.Dotfiles{Templates: []config.Template{{Src: "bashrc", Dest: "~/.bashrc"}}},
+			Profiles: map[string]config.Profile{
+				"work": {Dotfiles: []config.Template{{Src: "bashrc.work", Dest: dest}}},
+			},
+		}
+		r := Validate(cfg, "")
+		found := false
+		for _, f := range r.Findings {
+			if f.Category == "profile work" && f.Severity == SeverityWarning && strings.Contains(f.Message, "overrides a template") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("dest %q: expected override warning, got: %+v", dest, r.Findings)
+		}
+	}
+}
+
+// Distinct files must not be conflated by canonicalization: a profile dest
+// elsewhere stays warning-free.
+func TestValidateProfileDistinctDestNoOverrideWarning(t *testing.T) {
+	home := t.TempDir()
+	old := homeFn
+	homeFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { homeFn = old })
+
+	cfg := &config.Config{
+		Version:  1,
+		Dotfiles: config.Dotfiles{Templates: []config.Template{{Src: "bashrc", Dest: "~/.bashrc"}}},
+		Profiles: map[string]config.Profile{
+			"work": {Dotfiles: []config.Template{{Src: "zshrc", Dest: home + "/.zshrc"}}},
+		},
+	}
+	for _, f := range Validate(cfg, "").Findings {
+		if strings.Contains(f.Message, "overrides a template") {
+			t.Errorf("unexpected override warning: %+v", f)
+		}
+	}
+}
