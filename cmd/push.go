@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/ui"
 	"github.com/jfjrh2014/nestor/internal/vcs"
 	"github.com/spf13/cobra"
@@ -77,6 +78,18 @@ func runPushOut(ctx context.Context, w io.Writer) error {
 	dir, err := nestorConfigDir()
 	if err != nil {
 		return fmt.Errorf("finding config dir: %w", err)
+	}
+
+	// Refuse to publish a config nestor itself refuses to load: every other
+	// machine's 'nestor pull' rejects it (2026-10-31), so pushing it only
+	// spreads the brick. Checked before init/remote/commit so a refusal
+	// leaves the repo exactly as it was. A missing config keeps the old
+	// behaviour (nothing nestor-shaped to validate).
+	live := configPath()
+	if _, statErr := os.Stat(live); statErr == nil {
+		if _, err := config.Load(live); err != nil {
+			return fmt.Errorf("refusing to push an invalid config — fix %s first (other machines' 'nestor pull' would reject it): %w", live, err)
+		}
 	}
 
 	// Ensure the repo exists

@@ -362,7 +362,8 @@ func TestPushHealsDanglingRemoteHead(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(cfgPath, []byte("config: FROM-A\n"), 0o644); err != nil {
+		// Must load: push refuses configs validate() rejects.
+		if err := os.WriteFile(cfgPath, []byte("version: 1\nnote: FROM-A\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -417,4 +418,67 @@ func TestPushHealsDanglingRemoteHead(t *testing.T) {
 			t.Errorf("healthy remote should not trigger the dangling warning:\n%s", buf.String())
 		}
 	})
+}
+
+// TestPushRefusesInvalidConfig: a config validate() refuses (here a
+// self-inject mapping) must not be committed or published — every other
+// machine's pull would reject it. Refusal leaves no repo, no remote, no
+// commit, and the config byte-for-byte intact.
+func TestPushRefusesInvalidConfig(t *testing.T) {
+	skipIfNoGit(t)
+	remote := bareRemoteWithHead(t)
+	isolatedConfigHome(t)
+	cfgDir := filepath.Join(os.Getenv("HOME"), ".config", "nestor")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(cfgDir, "nestor.yml")
+	bad := "version: 1\nsecrets:\n  provider: env\n  mappings:\n    - key: TOK\n      inject:\n        \"~/.config/nestor/nestor.yml\": \"token: {{.TOK}}\"\n"
+	if err := os.WriteFile(cfgPath, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pushRemoteURL = remote
+	defer func() { pushRemoteURL = "" }()
+
+	var buf bytes.Buffer
+	err := runPushOut(context.Background(), &buf)
+	if err == nil || !strings.Contains(err.Error(), "refusing to push an invalid config") {
+		t.Fatalf("want invalid-config refusal, got %v\n%s", err, buf.String())
+	}
+	if remoteBranchExists(t, remote, "main") || remoteBranchExists(t, remote, "master") {
+		t.Error("invalid config reached the remote")
+	}
+	if _, statErr := os.Stat(filepath.Join(cfgDir, ".git")); !os.IsNotExist(statErr) {
+		t.Errorf("refusal still initialized a repo (stat err %v)", statErr)
+	}
+	got, _ := os.ReadFile(cfgPath)
+	if string(got) != bad {
+		t.Errorf("config changed on refusal:\n%s", got)
+	}
+}
+
+// TestPushValidConfigStillPublishes pins the untouched path: a config that
+// loads is committed and pushed as before.
+func TestPushValidConfigStillPublishes(t *testing.T) {
+	skipIfNoGit(t)
+	setInitDefaultBranch(t, "main")
+	remote := bareRemoteWithHead(t)
+	isolatedConfigHome(t)
+	cfgDir := filepath.Join(os.Getenv("HOME"), ".config", "nestor")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "nestor.yml"), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pushRemoteURL = remote
+	defer func() { pushRemoteURL = "" }()
+
+	var buf bytes.Buffer
+	if err := runPushOut(context.Background(), &buf); err != nil {
+		t.Fatalf("valid push: %v\n%s", err, buf.String())
+	}
+	if !remoteBranchExists(t, remote, "main") {
+		t.Errorf("valid config did not reach the remote:\n%s", buf.String())
+	}
 }
