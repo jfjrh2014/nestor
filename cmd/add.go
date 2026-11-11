@@ -293,10 +293,10 @@ func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 		if promptErr != nil {
 			return fmt.Errorf("add secret: %w", promptErr)
 		}
-		inject := map[string]string{}
-		if dest != "" && pattern != "" {
-			inject[dest] = pattern
+		if dest == "" || pattern == "" {
+			return errNoInjectTarget(name, out)
 		}
+		inject := map[string]string{dest: pattern}
 		prof.SecretMappings = append(prof.SecretMappings, config.Mapping{Key: name, Inject: inject})
 		cfg.Profiles[profileName] = prof
 		if err := writeConfig(path, cfg); err != nil {
@@ -319,11 +319,11 @@ func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 	if promptErr != nil {
 		return fmt.Errorf("add secret: %w", promptErr)
 	}
-
-	inject := map[string]string{}
-	if dest != "" && pattern != "" {
-		inject[dest] = pattern
+	if dest == "" || pattern == "" {
+		return errNoInjectTarget(name, out)
 	}
+
+	inject := map[string]string{dest: pattern}
 
 	mapping := config.Mapping{
 		Key:    name,
@@ -336,10 +336,17 @@ func addSecret(name, profileName string, in io.Reader, out io.Writer) error {
 	}
 
 	fmt.Fprintf(out, "nestor: added secret %q (provider: %s)\n", name, cfg.Secrets.Provider)
-	if len(inject) == 0 {
-		fmt.Fprintln(out, "       no injection target set — edit nestor.yml to add one before running 'nestor up'")
-	}
 	return nil
+}
+
+// errNoInjectTarget refuses a secret add whose inject prompt was skipped
+// (blank line or closed stdin). validate() rejects a mapping with an empty
+// inject map, and Load() runs validate() on every command, so writing one
+// bricked every later nestor invocation — including the 'list' and 'edit'
+// a user would reach for to fix it. Nothing is written.
+func errNoInjectTarget(name string, out io.Writer) error {
+	fmt.Fprintf(out, "nestor: refusing secret %s: an inject target is required (nestor.yml rejects a secret with nowhere to inject)\n", name)
+	return fmt.Errorf("add secret: %q needs an inject target — re-run and give a file path", name)
 }
 
 // promptInjectHome resolves the current user's home directory for inject
@@ -374,7 +381,7 @@ var addDotfileHome = promptInjectHome
 // explicit skip.
 func promptInjectTarget(name string, dotfileDests []string, in io.Reader, out io.Writer) (dest, pattern string, err error) {
 	scanner := bufio.NewScanner(in)
-	fmt.Fprintf(out, "inject into which file? (path, or blank to skip): ")
+	fmt.Fprintf(out, "inject into which file? (path, or blank to cancel): ")
 	if !scanner.Scan() {
 		return "", "", nil
 	}
@@ -467,7 +474,14 @@ func isLiveConfigPath(dest, home string) bool {
 // The write is durable (temp file + fsync + rename): a crash or full disk
 // mid-write leaves the previous config intact instead of a truncated,
 // unparseable YAML file that bricks every later command.
+//
+// The config is validated first: a shape Load() refuses would brick every
+// later command, so writeConfig refuses it loudly and leaves the file as it
+// was — the same belt import (2026-10-27) and sync (2026-10-30) carry.
 func writeConfig(path string, cfg *config.Config) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("refusing to write %s: %w", path, err)
+	}
 	data, err := config.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

@@ -262,30 +262,101 @@ func TestAddSecretWithTarget(t *testing.T) {
 	}
 }
 
+// TestAddSecretSkipTarget pins the 2026-11-11 contract: skipping the inject
+// prompt (blank line, or stdin closed before an answer) refuses the add with
+// nestor.yml byte-for-byte unchanged. The old code wrote a mapping with an
+// empty inject map and exited 0 — validate() rejects that shape, so every
+// later command (list, edit, up) failed to load the config. Covers the base
+// and profile branches.
 func TestAddSecretSkipTarget(t *testing.T) {
+	cases := []struct {
+		name, profile, input string
+	}{
+		{"base blank line", "", "\n"},
+		{"base closed stdin", "", ""},
+		{"profile blank line", "work", "\n"},
+		{"profile closed stdin", "work", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "nestor.yml")
+			writeTestConfig(t, cfgPath)
+			if tc.profile != "" {
+				appendProfilesSection(t, cfgPath, tc.profile)
+			}
+			before, err := os.ReadFile(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfgFile = cfgPath
+			defer func() { cfgFile = "" }()
+
+			var out bytes.Buffer
+			err = addSecret("api_key", tc.profile, strings.NewReader(tc.input), &out)
+			if err == nil {
+				t.Fatalf("addSecret with skipped target succeeded; want refusal (out: %s)", out.String())
+			}
+			if !strings.Contains(err.Error(), "needs an inject target") {
+				t.Errorf("error = %v, want inject-target refusal", err)
+			}
+			after, err := os.ReadFile(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Errorf("config changed on refusal:\n%s", after)
+			}
+			if _, err := config.Load(cfgPath); err != nil {
+				t.Errorf("config no longer loads after refused add: %v", err)
+			}
+		})
+	}
+}
+
+// TestWriteConfigRefusesInvalid pins the belt under every add path: a config
+// validate() rejects is never written, so no future add-side gap can brick
+// nestor.yml. The file on disk stays byte-for-byte as it was.
+func TestWriteConfigRefusesInvalid(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "nestor.yml")
 	writeTestConfig(t, cfgPath)
-	cfgFile = cfgPath
-	defer func() { cfgFile = "" }()
-
-	// User skips the inject target prompt
-	input := "\n"
-	var out bytes.Buffer
-	if err := addSecret("api_key", "", strings.NewReader(input), &out); err != nil {
-		t.Fatalf("addSecret: %v", err)
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "no injection target set") {
-		t.Errorf("expected skip warning, got: %s", out.String())
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Secrets.Mappings = append(cfg.Secrets.Mappings, config.Mapping{Key: "k", Inject: map[string]string{}})
+	err = writeConfig(cfgPath, cfg)
+	if err == nil || !strings.Contains(err.Error(), "inject is empty") {
+		t.Fatalf("writeConfig(invalid) err = %v, want validate refusal", err)
+	}
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("config changed on refusal:\n%s", after)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*.tmp*")); len(matches) != 0 {
+		t.Errorf("temp files left behind: %v", matches)
 	}
 
-	// The config should still load — but validate() will reject empty inject.
-	// This is intentional: the user explicitly skipped, and the message tells
-	// them to edit nestor.yml before running 'nestor up'. The old code wrote
-	// this exact shape silently with no warning.
-	_, err := config.Load(cfgPath)
-	if err == nil {
-		t.Error("expected config.Load to fail on empty inject (validate rejects it), but it passed")
+	// Untouched path: a valid config still writes.
+	cfg.Secrets.Mappings = cfg.Secrets.Mappings[:len(cfg.Secrets.Mappings)-1]
+	cfg.Packages.Common = append(cfg.Packages.Common, "ripgrep")
+	if err := writeConfig(cfgPath, cfg); err != nil {
+		t.Fatalf("writeConfig(valid): %v", err)
+	}
+	got, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(got.Packages.Common); n != 2 {
+		t.Errorf("packages after valid write = %v, want git + ripgrep", got.Packages.Common)
 	}
 }
 
