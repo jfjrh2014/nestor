@@ -200,6 +200,35 @@ func addDotfile(name, profileName string, out io.Writer) error {
 		return fmt.Errorf("add dotfile: create source dir: %w", err)
 	}
 	tmplPath := filepath.Join(sourceDir, srcName)
+
+	// The <base>.tmpl name is only unique per basename: ~/.config/git/config
+	// and ~/.ssh/config both want config.tmpl. When the name already backs a
+	// template for a DIFFERENT file, the keep-existing branch below would
+	// record the second dest against the first file's template, and the
+	// next 'nestor up' deploys git's config over ~/.ssh/config (probed
+	// 2026-11-12: both adds exit 0, ssh config destroyed). Pick the first
+	// <base>-N.tmpl that is this dest's own (a re-add) or wholly unused.
+	if owners := templateSrcOwners(cfg, sourceDir, tmplPath); hasOtherOwner(owners, name, home) {
+		for n := 2; ; n++ {
+			cand := fmt.Sprintf("%s-%d.tmpl", base, n)
+			candPath := filepath.Join(sourceDir, cand)
+			candOwners := templateSrcOwners(cfg, sourceDir, candPath)
+			if hasOtherOwner(candOwners, name, home) {
+				continue
+			}
+			if len(candOwners) == 0 {
+				// Unclaimed but present on disk: an orphan of unknown
+				// content, not this file's working copy. Skip it.
+				if _, statErr := os.Lstat(candPath); statErr == nil {
+					continue
+				}
+			}
+			fmt.Fprintf(out, "nestor: %s already backs another dotfile — using %s\n", srcName, cand)
+			srcName, tmplPath = cand, candPath
+			break
+		}
+	}
+
 	if _, err := os.Stat(tmplPath); err == nil {
 		fmt.Fprintf(out, "nestor: kept existing template %s (not re-copied)\n", tmplPath)
 	} else if err := fsutil.CopyFileSync(absPath, tmplPath); err != nil {
@@ -464,6 +493,40 @@ func isLiveConfigPath(dest, home string) bool {
 	}
 	if live := configPath(); live != "" {
 		if pathutil.CanonicalDest(dest, home) == pathutil.CanonicalDest(live, home) {
+			return true
+		}
+	}
+	return false
+}
+
+// templateSrcOwners returns the dests of every template (base and every
+// profile) whose src resolves to tmplPath. Relative srcs resolve against
+// sourceDir, the same rule the deployer applies.
+func templateSrcOwners(cfg *config.Config, sourceDir, tmplPath string) []string {
+	var owners []string
+	want := filepath.Clean(tmplPath)
+	collect := func(ts []config.Template) {
+		for _, t := range ts {
+			src := t.Src
+			if !filepath.IsAbs(src) {
+				src = filepath.Join(sourceDir, src)
+			}
+			if filepath.Clean(src) == want {
+				owners = append(owners, t.Dest)
+			}
+		}
+	}
+	collect(cfg.Dotfiles.Templates)
+	for _, p := range cfg.Profiles {
+		collect(p.Dotfiles)
+	}
+	return owners
+}
+
+// hasOtherOwner reports whether any owner dest is a different file than dest.
+func hasOtherOwner(owners []string, dest, home string) bool {
+	for _, o := range owners {
+		if o != dest && !pathutil.SamePath(o, dest, home) {
 			return true
 		}
 	}

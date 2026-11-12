@@ -1430,3 +1430,132 @@ func TestPromptInjectTargetRefusesUnresolvableDotfileDest(t *testing.T) {
 		t.Errorf("expected unresolvable-dest refusal naming the target, got: %s", out.String())
 	}
 }
+
+// TestAddDotfileSameBasenameGetsOwnTemplate pins the 2026-11-12 fix: two
+// files sharing a basename (~/.config/git/config, ~/.ssh/config) both wanted
+// config.tmpl, the second add "kept existing template" and recorded its dest
+// against the FIRST file's template, so the next deploy wrote git's config
+// over ~/.ssh/config. The second add must get its own template carrying its
+// own content, and a re-add of it must reuse that template, not mint a third.
+func TestAddDotfileSameBasenameGetsOwnTemplate(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	t.Setenv("HOME", dir)
+	gitCfg := filepath.Join(dir, ".config", "git", "config")
+	sshCfg := filepath.Join(dir, ".ssh", "config")
+	for p, body := range map[string]string{gitCfg: "[user]\n  name = me\n", sshCfg: "Host github.com\n  User git\n"} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	if err := addDotfile("~/.config/git/config", "", &out); err != nil {
+		t.Fatalf("add git config: %v", err)
+	}
+	if err := addDotfile("~/.ssh/config", "", &out); err != nil {
+		t.Fatalf("add ssh config: %v", err)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config load: %v", err)
+	}
+	if len(cfg.Dotfiles.Templates) != 2 {
+		t.Fatalf("expected 2 templates, got %d: %+v", len(cfg.Dotfiles.Templates), cfg.Dotfiles.Templates)
+	}
+	srcFor := map[string]string{}
+	for _, tp := range cfg.Dotfiles.Templates {
+		srcFor[tp.Dest] = tp.Src
+	}
+	if srcFor["~/.config/git/config"] == srcFor["~/.ssh/config"] {
+		t.Fatalf("both dests share src %q — the ssh deploy would write git's config", srcFor["~/.ssh/config"])
+	}
+	sshTmpl, err := os.ReadFile(filepath.Join(dir, "dotfiles", srcFor["~/.ssh/config"]))
+	if err != nil {
+		t.Fatalf("ssh template not materialized: %v", err)
+	}
+	if string(sshTmpl) != "Host github.com\n  User git\n" {
+		t.Errorf("ssh template carries the wrong content: %q", sshTmpl)
+	}
+	gitTmpl, err := os.ReadFile(filepath.Join(dir, "dotfiles", srcFor["~/.config/git/config"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gitTmpl) != "[user]\n  name = me\n" {
+		t.Errorf("git template was touched: %q", gitTmpl)
+	}
+
+	// Re-adding the ssh config is a no-op on the existing entry: same src,
+	// no third template minted.
+	before, _ := os.ReadFile(cfgPath)
+	out.Reset()
+	if err := addDotfile("~/.ssh/config", "", &out); err != nil {
+		t.Fatalf("re-add ssh config: %v", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Errorf("re-add rewrote the config:\n%s", after)
+	}
+	if !strings.Contains(out.String(), "already in config") {
+		t.Errorf("expected already-in-config message, got: %s", out.String())
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "dotfiles", "config-*.tmpl")); len(matches) != 1 {
+		t.Errorf("expected exactly one renamed template, got %v", matches)
+	}
+}
+
+// TestAddDotfileSkipsOrphanTemplateName pins the orphan rule: an unclaimed
+// <base>-N.tmpl already on disk has unknown content, so the renamed template
+// must not adopt it.
+func TestAddDotfileSkipsOrphanTemplateName(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nestor.yml")
+	writeTestConfig(t, cfgPath)
+	t.Setenv("HOME", dir)
+	gitCfg := filepath.Join(dir, ".config", "git", "config")
+	sshCfg := filepath.Join(dir, ".ssh", "config")
+	for p, body := range map[string]string{gitCfg: "git\n", sshCfg: "ssh\n", filepath.Join(dir, "dotfiles", "config-2.tmpl"): "orphan\n"} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out bytes.Buffer
+	if err := addDotfile("~/.config/git/config", "", &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := addDotfile("~/.ssh/config", "", &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sshSrc string
+	for _, tp := range cfg.Dotfiles.Templates {
+		if tp.Dest == "~/.ssh/config" {
+			sshSrc = tp.Src
+		}
+	}
+	if sshSrc != "config-3.tmpl" {
+		t.Fatalf("ssh src = %q, want config-3.tmpl (config-2.tmpl is an orphan)", sshSrc)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "dotfiles", "config-2.tmpl")); string(b) != "orphan\n" {
+		t.Errorf("orphan template was modified: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "dotfiles", "config-3.tmpl")); string(b) != "ssh\n" {
+		t.Errorf("ssh template content = %q", b)
+	}
+}
