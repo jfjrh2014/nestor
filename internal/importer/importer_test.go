@@ -253,3 +253,62 @@ func TestChezmoiNotFound(t *testing.T) {
 		t.Error("expected error for nonexistent chezmoi dir, got nil")
 	}
 }
+
+// Two imported files sharing a basename (and an import over a name the
+// config already uses for another file) must not share a template src:
+// both dests would deploy the same bytes on 'nestor up'.
+func TestMergeResultSameBasenameGetsOwnSrc(t *testing.T) {
+	cfg := &config.Config{
+		Dotfiles: config.Dotfiles{
+			Templates: []config.Template{
+				{Src: "config.tmpl", Dest: "~/.config/fish/config"},
+			},
+		},
+		Profiles: map[string]config.Profile{
+			"work": {Dotfiles: []config.Template{{Src: "config-2.tmpl", Dest: "~/.work/config"}}},
+		},
+	}
+	res := &Result{Dotfiles: []config.Template{
+		{Src: "config.tmpl", Dest: "~/.config/git/config"},
+		{Src: "config.tmpl", Dest: "~/.ssh/config"},
+		{Src: ".bashrc.tmpl", Dest: "~/.bashrc"},
+	}}
+	added, err := MergeResult(cfg, res)
+	if err != nil {
+		t.Fatalf("MergeResult: %v", err)
+	}
+	if added != 3 {
+		t.Fatalf("added: got %d, want 3", added)
+	}
+	want := map[string]string{
+		"~/.config/fish/config": "config.tmpl",
+		"~/.config/git/config":  "config-3.tmpl",
+		"~/.ssh/config":         "config-4.tmpl",
+		"~/.bashrc":             ".bashrc.tmpl",
+	}
+	seen := map[string]string{}
+	for _, d := range cfg.Dotfiles.Templates {
+		if w, ok := want[d.Dest]; !ok || d.Src != w {
+			t.Errorf("dest %s: src %q, want %q", d.Dest, d.Src, want[d.Dest])
+		}
+		if prev, dup := seen[d.Src]; dup {
+			t.Errorf("src %s shared by %s and %s", d.Src, prev, d.Dest)
+		}
+		seen[d.Src] = d.Dest
+	}
+}
+
+// A dest the config already declares is still deduped, keeping its src.
+func TestMergeResultExistingDestKeepsSrc(t *testing.T) {
+	cfg := &config.Config{Dotfiles: config.Dotfiles{Templates: []config.Template{
+		{Src: "config.tmpl", Dest: "~/.ssh/config"},
+	}}}
+	res := &Result{Dotfiles: []config.Template{{Src: "config.tmpl", Dest: "~/.ssh/config"}}}
+	added, err := MergeResult(cfg, res)
+	if err != nil {
+		t.Fatalf("MergeResult: %v", err)
+	}
+	if added != 0 || len(cfg.Dotfiles.Templates) != 1 || cfg.Dotfiles.Templates[0].Src != "config.tmpl" {
+		t.Fatalf("re-import changed config: added=%d templates=%+v", added, cfg.Dotfiles.Templates)
+	}
+}

@@ -332,13 +332,49 @@ func MergeResult(cfg *config.Config, res *Result) (int, error) {
 	for _, d := range cfg.Dotfiles.Templates {
 		existingDots[pathutil.CanonicalDest(d.Dest, home)] = true
 	}
-	for _, d := range res.Dotfiles {
-		if !existingDots[pathutil.CanonicalDest(d.Dest, home)] {
-			cfg.Dotfiles.Templates = append(cfg.Dotfiles.Templates, d)
-			existingDots[pathutil.CanonicalDest(d.Dest, home)] = true
-			added++
+	// Importers name srcs <base>.tmpl, which is only unique per basename:
+	// ~/.config/git/config and ~/.ssh/config both want config.tmpl, and an
+	// import beside an existing entry can hit a name the config already
+	// uses for another file. Two dests on one src deploy the same bytes to
+	// both — the next 'nestor up' writes git's config over ~/.ssh/config
+	// (probed 2026-11-13). Same rule 'add dotfile' adopted 2026-11-12: a
+	// taken name falls through to the first free <base>-N.tmpl.
+	usedSrcs := map[string]bool{}
+	for _, d := range cfg.Dotfiles.Templates {
+		usedSrcs[filepath.Clean(d.Src)] = true
+	}
+	for _, p := range cfg.Profiles {
+		for _, d := range p.Dotfiles {
+			usedSrcs[filepath.Clean(d.Src)] = true
 		}
+	}
+	for _, d := range res.Dotfiles {
+		key := pathutil.CanonicalDest(d.Dest, home)
+		if existingDots[key] {
+			continue
+		}
+		d.Src = uniqueSrc(d.Src, usedSrcs)
+		usedSrcs[filepath.Clean(d.Src)] = true
+		cfg.Dotfiles.Templates = append(cfg.Dotfiles.Templates, d)
+		existingDots[key] = true
+		added++
 	}
 
 	return added, nil
+}
+
+// uniqueSrc returns src unchanged when no other template uses it, else the
+// first <base>-N.tmpl (N from 2) not in used.
+func uniqueSrc(src string, used map[string]bool) string {
+	if !used[filepath.Clean(src)] {
+		return src
+	}
+	dir, file := filepath.Split(src)
+	base := strings.TrimSuffix(file, ".tmpl")
+	for n := 2; ; n++ {
+		cand := dir + fmt.Sprintf("%s-%d.tmpl", base, n)
+		if !used[filepath.Clean(cand)] {
+			return cand
+		}
+	}
 }
