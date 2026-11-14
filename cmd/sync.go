@@ -147,6 +147,11 @@ func runSyncOut(ctx context.Context, profileName string, w io.Writer) error {
 			kept = append(kept, t)
 		}
 		foundDots = kept
+		mergeSource := existing.Dotfiles.Source
+		if mergeSource == "" {
+			mergeSource = defaultSourceDir
+		}
+		foundDots = uniqueScanSrcs(existing, profileName, foundDots, home, mergeSource)
 		skippedBase := applyScanToConfig(existing, profileName, foundPkgs, foundDots, home)
 		if skippedBase > 0 {
 			p.Info(fmt.Sprintf("skipped %d base-managed item(s) already in the common sections (profiles hold machine-specific extras only)", skippedBase))
@@ -359,6 +364,75 @@ func scanDotfiles(home string) []config.Template {
 	return templates
 }
 
+// uniqueScanSrcs gives each scanned dotfile that will be merged a template
+// src no other file uses. Scan names srcs <name>.tmpl, so a config that
+// already backs a different dest with that name (a ZDOTDIR user's
+// ~/.config/zsh/.zshrc on .zshrc.tmpl) got the scanned ~/.zshrc recorded on
+// the same src; the copy step then "kept existing template" and the next
+// 'nestor up' deployed the ZDOTDIR file over ~/.zshrc (probed 2026-11-14:
+// sync exit 0, diff said "run 'nestor up' to fix"). Same rule 'add dotfile'
+// (2026-11-12) and import (2026-11-13) follow: a taken name falls through to
+// the first <base>-N.tmpl that is unclaimed and not an orphan on disk.
+// Entries whose dest is already declared in the target layer are left
+// alone; the merge dedups them.
+func uniqueScanSrcs(cfg *config.Config, profileName string, found []config.Template, home, sourceDir string) []config.Template {
+	declared := map[string]bool{}
+	for _, t := range cfg.Dotfiles.Templates {
+		declared[pathutil.CanonicalDest(t.Dest, home)] = true
+	}
+	if profileName != "" {
+		for _, t := range cfg.Profiles[profileName].Dotfiles {
+			declared[pathutil.CanonicalDest(t.Dest, home)] = true
+		}
+	}
+	owners := map[string]string{}
+	claim := func(t config.Template) {
+		k := filepath.Clean(t.Src)
+		if _, ok := owners[k]; !ok {
+			owners[k] = pathutil.CanonicalDest(t.Dest, home)
+		}
+	}
+	for _, t := range cfg.Dotfiles.Templates {
+		claim(t)
+	}
+	for _, p := range cfg.Profiles {
+		for _, t := range p.Dotfiles {
+			claim(t)
+		}
+	}
+	out := make([]config.Template, 0, len(found))
+	for _, t := range found {
+		dest := pathutil.CanonicalDest(t.Dest, home)
+		if declared[dest] {
+			out = append(out, t)
+			continue
+		}
+		if owner, ok := owners[filepath.Clean(t.Src)]; ok && owner != dest {
+			dir, file := filepath.Split(t.Src)
+			base := strings.TrimSuffix(file, ".tmpl")
+			for n := 2; ; n++ {
+				cand := dir + fmt.Sprintf("%s-%d.tmpl", base, n)
+				owner, ok := owners[filepath.Clean(cand)]
+				if ok && owner != dest {
+					continue
+				}
+				if !ok {
+					// Unclaimed but present: an orphan of unknown content,
+					// which the copy step would keep instead of this file.
+					if _, err := os.Lstat(filepath.Join(sourceDir, cand)); err == nil {
+						continue
+					}
+				}
+				t.Src = cand
+				break
+			}
+		}
+		claim(t)
+		out = append(out, t)
+	}
+	return out
+}
+
 // copyDotfileTemplates materializes detected dotfiles as template files in the
 // source dir, so the generated config points at files that actually exist. A
 // template's Src (e.g. ".bashrc.tmpl") is mapped back to the detected file
@@ -373,10 +447,10 @@ func copyDotfileTemplates(home, sourceDir string, templates []config.Template) (
 	skipped := 0
 	var firstErr error
 	for _, t := range templates {
-		// t.Src is like ".bashrc.tmpl" — strip the ".tmpl" suffix to recover the
-		// real file name, then resolve it under home.
-		srcFile := strings.TrimSuffix(t.Src, ".tmpl")
-		src := filepath.Join(home, srcFile)
+		// Read the file the template backs from its dest, not from the src
+		// name: uniqueScanSrcs may have renamed the src (.zshrc-2.tmpl), and
+		// home+".zshrc-2" is not the scanned file.
+		src := pathutil.ExpandHome(t.Dest, home)
 		dest := filepath.Join(sourceDir, t.Src)
 		if _, err := os.Stat(dest); err == nil {
 			skipped++

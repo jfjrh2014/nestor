@@ -845,3 +845,96 @@ func TestSyncProfileCaptureCanonicalDistinctDests(t *testing.T) {
 		t.Errorf("profile work dotfiles = %v, want [{.zshrc.tmpl ./.zshrc}]", prof.Dotfiles)
 	}
 }
+
+// TestSyncMergeGivesSameNameDotfileItsOwnSrc: scan names srcs <name>.tmpl,
+// so a config already backing ~/.config/zsh/.zshrc (a ZDOTDIR user) with
+// .zshrc.tmpl got the scanned ~/.zshrc recorded on that same src, the copy
+// step kept the existing template, and the next 'nestor up' deployed the
+// ZDOTDIR file over ~/.zshrc (probed 2026-11-14 with the HEAD binary).
+func TestSyncMergeGivesSameNameDotfileItsOwnSrc(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	src := filepath.Join(home, "dotsrc")
+	cfgDir := filepath.Join(home, ".config", "nestor")
+	for _, d := range []string{src, cfgDir, filepath.Join(home, ".config", "zsh")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(home, ".config", "zsh", ".zshrc"): "zdotdir zshrc\n",
+		filepath.Join(src, ".zshrc.tmpl"):               "zdotdir zshrc\n",
+		filepath.Join(home, ".zshrc"):                   "home zshrc\n",
+	}
+	for p, c := range files {
+		if err := os.WriteFile(p, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfgPath := filepath.Join(cfgDir, "nestor.yml")
+	yml := "version: 1\ndotfiles:\n  source: " + src + "\n  strategy: copy\n  templates:\n    - src: .zshrc.tmpl\n      dest: ~/.config/zsh/.zshrc\n"
+	if err := os.WriteFile(cfgPath, []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	defer func() { cfgFile = "" }()
+
+	var out strings.Builder
+	if err := runSyncOut(context.Background(), "", &out); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	merged, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("merged config does not load: %v", err)
+	}
+	srcs := map[string]string{}
+	for _, tm := range merged.Dotfiles.Templates {
+		srcs[tm.Dest] = tm.Src
+	}
+	if srcs["~/.config/zsh/.zshrc"] != ".zshrc.tmpl" {
+		t.Errorf("existing entry's src changed: %v", srcs)
+	}
+	got := srcs["~/.zshrc"]
+	if got == "" || got == ".zshrc.tmpl" {
+		t.Fatalf("~/.zshrc src = %q, want its own template (srcs %v)", got, srcs)
+	}
+	if b, _ := os.ReadFile(filepath.Join(src, got)); string(b) != "home zshrc\n" {
+		t.Errorf("%s holds %q, want the scanned ~/.zshrc content", got, b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(src, ".zshrc.tmpl")); string(b) != "zdotdir zshrc\n" {
+		t.Errorf(".zshrc.tmpl was rewritten: %q", b)
+	}
+}
+
+// TestUniqueScanSrcs pins the naming rule: declared dests keep their src
+// (the merge dedups them), a free name stays as scanned, a taken name skips
+// orphans on disk, and profile templates count as claims.
+func TestUniqueScanSrcs(t *testing.T) {
+	home := "/home/tester"
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, ".zshrc-2.tmpl"), []byte("orphan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Dotfiles: config.Dotfiles{Templates: []config.Template{
+			{Src: ".zshrc.tmpl", Dest: "~/.config/zsh/.zshrc"},
+			{Src: ".bashrc.tmpl", Dest: "~/.bashrc"},
+		}},
+		Profiles: map[string]config.Profile{
+			"work": {Dotfiles: []config.Template{{Src: ".vimrc.tmpl", Dest: "~/work/.vimrc"}}},
+		},
+	}
+	got := uniqueScanSrcs(cfg, "", []config.Template{
+		{Src: ".bashrc.tmpl", Dest: "/home/tester/.bashrc"},
+		{Src: ".zshrc.tmpl", Dest: "~/.zshrc"},
+		{Src: ".vimrc.tmpl", Dest: "~/.vimrc"},
+		{Src: ".tmux.conf.tmpl", Dest: "~/.tmux.conf"},
+	}, home, sourceDir)
+	want := []string{".bashrc.tmpl", ".zshrc-3.tmpl", ".vimrc-2.tmpl", ".tmux.conf.tmpl"}
+	for i, w := range want {
+		if got[i].Src != w {
+			t.Errorf("entry %d (%s) src = %q, want %q", i, got[i].Dest, got[i].Src, w)
+		}
+	}
+}
