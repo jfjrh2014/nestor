@@ -931,3 +931,45 @@ func TestValidateRejectsDuplicateDestUncleanSpellings(t *testing.T) {
 		t.Fatal("expected error for duplicate profile dest spelled with .. traversal")
 	}
 }
+
+// TestLoadRefusesOtherUserTildeSource pins the 2026-11-15 fix: a source of
+// "~user/..." was never expanded, so commands that write templates created a
+// literal "~root/dotfiles" dir under the cwd (probed with the HEAD binary).
+func TestLoadRefusesOtherUserTildeSource(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nestor.yml")
+	if err := os.WriteFile(path, []byte("version: 1\ndotfiles: {source: ~root/dotfiles}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "~user") {
+		t.Fatalf("Load() err = %v, want a ~user refusal", err)
+	}
+}
+
+// TestLoadSourceTildeHomeUnavailable: with no resolvable home a "~/..." source
+// must refuse instead of passing through as a literal relative path, while
+// an absolute source still loads.
+func TestLoadSourceTildeHomeUnavailable(t *testing.T) {
+	t.Setenv("HOME", "")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nestor.yml")
+	if err := os.WriteFile(path, []byte("version: 1\ndotfiles: {source: ~/dotfiles}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "home directory is unavailable") {
+		t.Fatalf("Load() err = %v, want home-unavailable refusal", err)
+	}
+
+	abs := filepath.Join(dir, "src")
+	if err := os.WriteFile(path, []byte("version: 1\ndotfiles: {source: "+abs+"}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("absolute source: %v", err)
+	}
+	if cfg.Dotfiles.Source != abs {
+		t.Fatalf("Source = %q, want %q", cfg.Dotfiles.Source, abs)
+	}
+}

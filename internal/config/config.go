@@ -136,9 +136,16 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// expand ~ in paths
+	// Resolve ~ in the source dir. An unresolvable tilde used to pass through
+	// literally, and every command that writes templates (add, edit, sync)
+	// then created a "~" directory under the cwd — templates scattered per
+	// working directory, invisible to the next 'nestor up' run elsewhere.
 	home, _ := os.UserHomeDir()
-	cfg.Dotfiles.Source = pathutil.ExpandHome(cfg.Dotfiles.Source, home)
+	src, err := pathutil.ResolveHome(cfg.Dotfiles.Source, home)
+	if err != nil {
+		return nil, fmt.Errorf("dotfiles.source: %w", err)
+	}
+	cfg.Dotfiles.Source = src
 
 	return &cfg, nil
 }
@@ -174,6 +181,13 @@ func (c *Config) validate() error {
 	home, _ := os.UserHomeDir()
 	if c.Dotfiles.Strategy != "copy" && c.Dotfiles.Strategy != "symlink" {
 		return fmt.Errorf("dotfiles.strategy must be 'copy' or 'symlink', got %q", c.Dotfiles.Strategy)
+	}
+
+	// dotfiles.source must not use "~user/...": nestor never expands it, so
+	// the literal string became a relative dir under whatever cwd the
+	// command ran from (probed: 'add dotfile' wrote ./~root/dotfiles/*.tmpl).
+	if pathutil.IsOtherUserTilde(c.Dotfiles.Source) {
+		return fmt.Errorf("dotfiles.source %q uses the ~user/... form, which nestor does not expand (templates would land in a literal directory under the current one)", c.Dotfiles.Source)
 	}
 
 	// Validate secret provider is known (only when provider or mappings are declared).
