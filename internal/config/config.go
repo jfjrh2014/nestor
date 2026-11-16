@@ -145,6 +145,17 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dotfiles.source: %w", err)
 	}
+	// A relative source resolves against the config file's directory, not the
+	// cwd: 'source: dotfiles' used to mean "./dotfiles wherever you ran
+	// nestor", so 'add dotfile' scattered templates per working directory and
+	// 'diff'/'up' run elsewhere reported every src missing (probed).
+	if src != "" && !filepath.IsAbs(src) {
+		cfgDir, err := filepath.Abs(filepath.Dir(path))
+		if err != nil {
+			return nil, fmt.Errorf("dotfiles.source: resolving config dir: %w", err)
+		}
+		src = filepath.Join(cfgDir, src)
+	}
 	cfg.Dotfiles.Source = src
 
 	return &cfg, nil

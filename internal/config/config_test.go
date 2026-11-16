@@ -973,3 +973,72 @@ func TestLoadSourceTildeHomeUnavailable(t *testing.T) {
 		t.Fatalf("Source = %q, want %q", cfg.Dotfiles.Source, abs)
 	}
 }
+
+// TestLoadRelativeSourceResolvesAgainstConfigDir pins the 2026-11-16 fix: a
+// relative dotfiles.source resolved against the cwd, so 'add dotfile' run
+// from another directory wrote templates there and 'diff' elsewhere reported
+// every src missing (probed with the HEAD binary).
+func TestLoadRelativeSourceResolvesAgainstConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nestor.yml")
+	if err := os.WriteFile(path, []byte("version: 1\ndotfiles: {source: dotfiles}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	want := filepath.Join(dir, "dotfiles")
+	if cfg.Dotfiles.Source != want {
+		t.Fatalf("Source = %q, want %q (config dir, not cwd %q)", cfg.Dotfiles.Source, want, elsewhere)
+	}
+
+	// A config path given relative to the cwd still anchors on the config dir.
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load("nestor.yml")
+	if err != nil {
+		t.Fatalf("Load(relative path) err = %v", err)
+	}
+	if cfg.Dotfiles.Source != want {
+		t.Fatalf("relative config path: Source = %q, want %q", cfg.Dotfiles.Source, want)
+	}
+}
+
+// TestLoadAbsoluteAndEmptySourceUntouched: absolute and tilde sources keep
+// their meaning, and an empty source stays empty so callers still fall back
+// to DefaultDotfilesSource.
+func TestLoadAbsoluteAndEmptySourceUntouched(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nestor.yml")
+	cases := map[string]string{
+		"/opt/dots":  "/opt/dots",
+		"~/dotfiles": filepath.Join(home, "dotfiles"),
+		"\"\"":       "",
+	}
+	for in, want := range cases {
+		if err := os.WriteFile(path, []byte("version: 1\ndotfiles: {source: "+in+"}\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("source %s: %v", in, err)
+		}
+		if cfg.Dotfiles.Source != want {
+			t.Fatalf("source %s: got %q, want %q", in, cfg.Dotfiles.Source, want)
+		}
+	}
+}
