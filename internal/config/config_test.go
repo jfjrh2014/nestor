@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadValid(t *testing.T) {
@@ -1040,5 +1042,65 @@ func TestLoadAbsoluteAndEmptySourceUntouched(t *testing.T) {
 		if cfg.Dotfiles.Source != want {
 			t.Fatalf("source %s: got %q, want %q", in, cfg.Dotfiles.Source, want)
 		}
+	}
+}
+
+// TestMarshalKeepsSourceSpelling pins the 2026-11-17 fix: Load resolves
+// dotfiles.source for this machine, and Marshal used to write the resolved
+// absolute path back, so the first 'add' or 'sync' turned "~/dotfiles" into
+// one machine's home (probed with the HEAD binary) and the pushed config
+// pointed every other machine at a directory that does not exist there.
+func TestMarshalKeepsSourceSpelling(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nestor.yml")
+	for _, in := range []string{"~/dotfiles", "dotfiles", "/opt/dots"} {
+		if err := os.WriteFile(path, []byte("version: 1\ndotfiles: {source: "+in+"}\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("source %s: %v", in, err)
+		}
+		if !filepath.IsAbs(cfg.Dotfiles.Source) {
+			t.Fatalf("source %s: Load should still resolve for callers, got %q", in, cfg.Dotfiles.Source)
+		}
+		data, err := Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Config
+		if err := yaml.Unmarshal(data, &back); err != nil {
+			t.Fatal(err)
+		}
+		if back.Dotfiles.Source != in {
+			t.Errorf("source %s: marshaled as %q, want the file's spelling", in, back.Dotfiles.Source)
+		}
+		if cfg.Dotfiles.Source == in && in != "/opt/dots" {
+			t.Errorf("source %s: Marshal mutated the loaded config", in)
+		}
+	}
+}
+
+// TestMarshalWritesDeliberateSourceChange: a caller that sets a new source
+// after Load gets that value written, not the file's old spelling.
+func TestMarshalWritesDeliberateSourceChange(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "nestor.yml")
+	if err := os.WriteFile(path, []byte("version: 1\ndotfiles: {source: ~/dotfiles}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Dotfiles.Source = "~/elsewhere"
+	data, err := Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "source: ~/elsewhere") {
+		t.Errorf("deliberate source change lost:\n%s", data)
 	}
 }

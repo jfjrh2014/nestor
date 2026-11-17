@@ -17,6 +17,14 @@ type Config struct {
 	Secrets  Secrets            `yaml:"secrets"`
 	Shells   Shells             `yaml:"shells"`
 	Profiles map[string]Profile `yaml:"profiles"`
+
+	// sourceAsWritten/sourceResolved remember dotfiles.source as the file
+	// spelled it and as Load resolved it for this machine. Marshal writes the
+	// original spelling back while Source still holds the resolved value, so
+	// a config-writing command (add, sync) never persists one machine's
+	// absolute home into a config meant to be pushed to others.
+	sourceAsWritten string
+	sourceResolved  string
 }
 
 // Packages lists packages by platform
@@ -156,6 +164,8 @@ func Load(path string) (*Config, error) {
 		}
 		src = filepath.Join(cfgDir, src)
 	}
+	cfg.sourceAsWritten = cfg.Dotfiles.Source
+	cfg.sourceResolved = src
 	cfg.Dotfiles.Source = src
 
 	return &cfg, nil
@@ -380,7 +390,19 @@ func templateDests(templates []Template) []string {
 
 // Marshal serializes the config back to YAML bytes.
 func Marshal(cfg *Config) ([]byte, error) {
-	data, err := yaml.Marshal(cfg)
+	// Load resolves dotfiles.source to an absolute path for this machine.
+	// Writing that back turned "~/dotfiles" into "/home/<user>/dotfiles" (and
+	// a config-relative "dotfiles" into this checkout's absolute path) on the
+	// first 'add' or 'sync' — the pushed config then pointed every other
+	// machine at a directory that does not exist there (probed). Restore the
+	// file's spelling unless a caller deliberately set a new source.
+	out := cfg
+	if cfg.sourceAsWritten != "" && cfg.Dotfiles.Source == cfg.sourceResolved {
+		c := *cfg
+		c.Dotfiles.Source = cfg.sourceAsWritten
+		out = &c
+	}
+	data, err := yaml.Marshal(out)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling config: %w", err)
 	}
