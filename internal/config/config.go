@@ -85,6 +85,21 @@ func DefaultDotfilesSource() string {
 	return filepath.Join(home, ".config", "nestor", "dotfiles")
 }
 
+// DefaultDotfilesSourceSpelling is DefaultDotfilesSource as written to a
+// config file: home-relative, so it means the same dir on every machine.
+const DefaultDotfilesSourceSpelling = "~/.config/nestor/dotfiles"
+
+// isDefaultSource reports whether src is this machine's resolved default
+// source dir. False when the home dir is unknown, so a relative fallback
+// never gets rewritten.
+func isDefaultSource(src string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || src == "" {
+		return false
+	}
+	return filepath.Clean(src) == filepath.Join(home, ".config", "nestor", "dotfiles")
+}
+
 // ValidProfile returns true if a profile with the given name is defined.
 func (c *Config) ValidProfile(name string) bool {
 	_, ok := c.Profiles[name]
@@ -396,10 +411,21 @@ func Marshal(cfg *Config) ([]byte, error) {
 	// first 'add' or 'sync' — the pushed config then pointed every other
 	// machine at a directory that does not exist there (probed). Restore the
 	// file's spelling unless a caller deliberately set a new source.
+	//
+	// A source no file spelled (fresh 'sync', or a merge into a config with no
+	// source) that equals this machine's default dir is written as the
+	// portable ~ form: sync used to persist "/home/<user>/.config/nestor/
+	// dotfiles", so a second machine with another home pulled a config whose
+	// templates live nowhere (probed).
 	out := cfg
-	if cfg.sourceAsWritten != "" && cfg.Dotfiles.Source == cfg.sourceResolved {
+	switch {
+	case cfg.sourceAsWritten != "" && cfg.Dotfiles.Source == cfg.sourceResolved:
 		c := *cfg
 		c.Dotfiles.Source = cfg.sourceAsWritten
+		out = &c
+	case cfg.sourceAsWritten == "" && isDefaultSource(cfg.Dotfiles.Source):
+		c := *cfg
+		c.Dotfiles.Source = DefaultDotfilesSourceSpelling
 		out = &c
 	}
 	data, err := yaml.Marshal(out)

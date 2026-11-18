@@ -1104,3 +1104,88 @@ func TestMarshalWritesDeliberateSourceChange(t *testing.T) {
 		t.Errorf("deliberate source change lost:\n%s", data)
 	}
 }
+
+// TestMarshalWritesDefaultSourcePortably: a source no file spelled (a fresh
+// 'sync', or a merge into a config with no source) that equals this machine's
+// default dir is written as ~/.config/nestor/dotfiles, not this machine's
+// absolute home — a second machine with another home must find its templates.
+func TestMarshalWritesDefaultSourcePortably(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	abs := filepath.Join(home, ".config", "nestor", "dotfiles")
+
+	fresh := &Config{Version: 1, Dotfiles: Dotfiles{Source: abs}}
+
+	path := filepath.Join(t.TempDir(), "nestor.yml")
+	if err := os.WriteFile(path, []byte("version: 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged.Dotfiles.Source = DefaultDotfilesSource()
+
+	for name, cfg := range map[string]*Config{"fresh": fresh, "merge": merged} {
+		data, err := Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), home) {
+			t.Errorf("%s: marshaled config carries this machine's home:\n%s", name, data)
+		}
+		if !strings.Contains(string(data), "source: "+DefaultDotfilesSourceSpelling) {
+			t.Errorf("%s: want source %s, got:\n%s", name, DefaultDotfilesSourceSpelling, data)
+		}
+		if cfg.Dotfiles.Source != abs {
+			t.Errorf("%s: Marshal mutated the config: %q", name, cfg.Dotfiles.Source)
+		}
+		// Round trip: the written spelling still loads to the same dir.
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			t.Fatal(err)
+		}
+		back, err := Load(path)
+		if err != nil {
+			t.Fatalf("%s: reload: %v", name, err)
+		}
+		if back.Dotfiles.Source != abs {
+			t.Errorf("%s: reloaded source %q, want %q", name, back.Dotfiles.Source, abs)
+		}
+	}
+}
+
+// TestMarshalLeavesOtherSourcesAlone: only the unspelled default is rewritten.
+// A custom unspelled source and a file that spelled the default absolutely
+// keep exactly what they had.
+func TestMarshalLeavesOtherSourcesAlone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	abs := filepath.Join(home, ".config", "nestor", "dotfiles")
+
+	custom := &Config{Version: 1, Dotfiles: Dotfiles{Source: "/opt/dots"}}
+	data, err := Marshal(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "source: /opt/dots") {
+		t.Errorf("custom source rewritten:\n%s", data)
+	}
+
+	path := filepath.Join(t.TempDir(), "nestor.yml")
+	if err := os.WriteFile(path, []byte("version: 1\ndotfiles: {source: "+abs+"}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	spelled, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = Marshal(spelled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "source: "+abs) {
+		t.Errorf("file's absolute spelling not kept:\n%s", data)
+	}
+}
