@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jfjrh2014/nestor/internal/config"
 )
 
 func TestResolveImporterUnknownSource(t *testing.T) {
@@ -310,5 +312,113 @@ func TestImportValidChezmoiStillWrites(t *testing.T) {
 	raw, _ := os.ReadFile(cfgPath)
 	if !strings.Contains(string(raw), ".config/nvim/init.toml") {
 		t.Error("the imported dest should be written into the config")
+	}
+}
+
+// TestImportMaterializesTemplates: import used to record src entries and copy
+// nothing, so every imported dotfile was src-missing from the first 'nestor
+// up' on (probed with the HEAD binary: exit 0, empty source dir, 'diff'
+// reporting "src missing"). Each new template must land in the source dir
+// with the origin's bytes; a same-basename pair keeps distinct srcs, and an
+// orphan already on disk is never adopted or overwritten.
+func TestImportMaterializesTemplates(t *testing.T) {
+	dir, cfgPath := setupImportTest(t)
+	t.Setenv("HOME", dir)
+	src := filepath.Join(dir, "chezmoi")
+	files := map[string]string{
+		"dot_bashrc":                "export FROM_CHEZMOI=1\n",
+		"dot_config/git/config":     "[user]\n\tname = git\n",
+		"private_dot_ssh/config":    "Host *\n",
+		"dot_config/nvim/init.toml": "[ok]\n",
+	}
+	for rel, body := range files {
+		p := filepath.Join(src, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orphan := filepath.Join(dir, "dotfiles", ".bashrc.tmpl")
+	if err := os.WriteFile(orphan, []byte("ORPHAN\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runImport("chezmoi", src, &buf); err != nil {
+		t.Fatalf("import should succeed, got: %v\n%s", err, buf.String())
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("imported config must load: %v", err)
+	}
+	want := map[string]string{
+		"~/.bashrc":                files["dot_bashrc"],
+		"~/.config/git/config":     files["dot_config/git/config"],
+		"~/.ssh/config":            files["private_dot_ssh/config"],
+		"~/.config/nvim/init.toml": files["dot_config/nvim/init.toml"],
+	}
+	if len(cfg.Dotfiles.Templates) != len(want) {
+		t.Fatalf("want %d templates, got %+v", len(want), cfg.Dotfiles.Templates)
+	}
+	srcs := map[string]bool{}
+	for _, tm := range cfg.Dotfiles.Templates {
+		body, ok := want[tm.Dest]
+		if !ok {
+			t.Errorf("unexpected dest %s", tm.Dest)
+			continue
+		}
+		if srcs[tm.Src] {
+			t.Errorf("src %s recorded for two dests", tm.Src)
+		}
+		srcs[tm.Src] = true
+		got, err := os.ReadFile(filepath.Join(cfg.Dotfiles.Source, tm.Src))
+		if err != nil {
+			t.Errorf("template for %s not materialized: %v", tm.Dest, err)
+			continue
+		}
+		if string(got) != body {
+			t.Errorf("template for %s = %q, want origin bytes %q", tm.Dest, got, body)
+		}
+		if tm.Dest == "~/.bashrc" && tm.Src == ".bashrc.tmpl" {
+			t.Error("the orphan .bashrc.tmpl on disk must not be adopted")
+		}
+	}
+	if got, _ := os.ReadFile(orphan); string(got) != "ORPHAN\n" {
+		t.Errorf("orphan template must be left untouched, got %q", got)
+	}
+}
+
+// TestImportRefusesUnreadableOrigin: an origin that cannot be read (here a
+// dangling symlink in the chezmoi dir) refuses the whole import before any
+// copy, so neither the config nor the source dir changes.
+func TestImportRefusesUnreadableOrigin(t *testing.T) {
+	dir, cfgPath := setupImportTest(t)
+	t.Setenv("HOME", dir)
+	src := filepath.Join(dir, "chezmoi")
+	if err := os.MkdirAll(src, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "dot_zshrc"), []byte("ok\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "gone"), filepath.Join(src, "dot_bashrc")); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(cfgPath)
+
+	var buf bytes.Buffer
+	err := runImport("chezmoi", src, &buf)
+	if err == nil || !strings.Contains(err.Error(), "nothing written") {
+		t.Fatalf("expected a loud refusal, got: %v", err)
+	}
+	if after, _ := os.ReadFile(cfgPath); string(after) != string(before) {
+		t.Error("refused import must leave the config byte-for-byte unchanged")
+	}
+	entries, _ := os.ReadDir(filepath.Join(dir, "dotfiles"))
+	if len(entries) != 0 {
+		t.Errorf("refused import must copy nothing, source dir has %d entries", len(entries))
 	}
 }

@@ -19,6 +19,11 @@ type Result struct {
 	Dotfiles []config.Template
 	Source   string
 	Skipped  int
+	// Origins maps each imported dotfile's Dest to the absolute file its
+	// template content comes from (the chezmoi source file, or the live file
+	// yadm tracks). Callers materialize templates from it: without a copy the
+	// recorded src never exists and every 'nestor up' reports src-missing.
+	Origins map[string]string
 }
 
 // Importer is the common interface for all import sources.
@@ -148,7 +153,7 @@ func NewChezmoi(sourceDir string) (*Chezmoi, error) {
 func (c *Chezmoi) Name() string { return "chezmoi" }
 
 func (c *Chezmoi) Import() (*Result, error) {
-	res := &Result{Source: c.SourceDir}
+	res := &Result{Source: c.SourceDir, Origins: map[string]string{}}
 
 	err := filepath.Walk(c.SourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -172,6 +177,7 @@ func (c *Chezmoi) Import() (*Result, error) {
 			Src:  name + ".tmpl",
 			Dest: "~/" + dest,
 		})
+		res.Origins["~/"+dest] = path
 		return nil
 	})
 	if err != nil {
@@ -251,7 +257,7 @@ func (y *Yadm) Import() (*Result, error) {
 		return nil, fmt.Errorf("running yadm list: %w", err)
 	}
 
-	res := &Result{Source: "yadm"}
+	res := &Result{Source: "yadm", Origins: map[string]string{}}
 	// The "~/"-relative dests below only mean anything against the real
 	// home: a failed lookup would TrimPrefix("")+"/" off every absolute
 	// path, turning managed files into "~/home/u/..." and paths outside
@@ -282,6 +288,7 @@ func (y *Yadm) Import() (*Result, error) {
 			Src:  name + ".tmpl",
 			Dest: "~/" + rel,
 		})
+		res.Origins["~/"+rel] = line
 	}
 	return res, nil
 }

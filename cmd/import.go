@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/fsutil"
 	"github.com/jfjrh2014/nestor/internal/importer"
 	"github.com/spf13/cobra"
 )
@@ -89,6 +92,7 @@ func runImport(name, srcPath string, w io.Writer) error {
 	}
 
 	// Merge into config and write
+	prevTemplates := len(cfg.Dotfiles.Templates)
 	added, mergeErr := importer.MergeResult(cfg, res)
 	if mergeErr != nil {
 		return fmt.Errorf("import: %w", mergeErr)
@@ -109,6 +113,16 @@ func runImport(name, srcPath string, w io.Writer) error {
 	// On refusal the config is left byte-for-byte as it was.
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("import would produce an invalid config - nothing written: %w", err)
+	}
+
+	// Materialize the new templates before the config records them. Import
+	// used to write src entries and copy nothing, so every imported dotfile
+	// was src-missing from the first 'nestor up' on, and 'diff' told the user
+	// to run the very 'up' that cannot fix it (probed: exit 0, empty source
+	// dir). Same contract as 'add dotfile' and sync capture. On failure the
+	// config is left byte-for-byte as it was.
+	if err := materializeImported(cfg, cfg.Dotfiles.Templates[prevTemplates:], res.Origins, w); err != nil {
+		return fmt.Errorf("import: %w", err)
 	}
 
 	if err := writeConfig(nestorPath, cfg); err != nil {
@@ -145,4 +159,78 @@ func resolveImporter(name, srcPath string) (importer.Importer, error) {
 	default:
 		return nil, fmt.Errorf("unknown import source %q (use chezmoi, yadm, or brewfile)", name)
 	}
+}
+
+// materializeImported copies each newly merged template's origin file into
+// the dotfiles source dir. Every origin is checked before anything is copied,
+// so an unreadable origin refuses the import with nothing written. A src name
+// already present on disk is an orphan of unknown content (the dests are new
+// to the config), so the template moves to the first free <base>-N.tmpl
+// instead of adopting it — the rule 'add dotfile' uses.
+func materializeImported(cfg *config.Config, added []config.Template, origins map[string]string, w io.Writer) error {
+	if len(added) == 0 {
+		return nil
+	}
+	for _, t := range added {
+		origin, ok := origins[t.Dest]
+		if !ok {
+			return fmt.Errorf("no source file recorded for %s - nothing written", t.Dest)
+		}
+		info, err := os.Stat(origin)
+		if err != nil {
+			return fmt.Errorf("reading %s for %s - nothing written: %w", origin, t.Dest, err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("%s for %s is a directory - nothing written", origin, t.Dest)
+		}
+	}
+
+	sourceDir := cfg.Dotfiles.Source
+	if sourceDir == "" {
+		sourceDir = config.DefaultDotfilesSource()
+	}
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		return fmt.Errorf("create source dir: %w", err)
+	}
+
+	used := map[string]bool{}
+	for _, t := range cfg.Dotfiles.Templates {
+		used[filepath.Clean(t.Src)] = true
+	}
+	for _, p := range cfg.Profiles {
+		for _, t := range p.Dotfiles {
+			used[filepath.Clean(t.Src)] = true
+		}
+	}
+
+	first := len(cfg.Dotfiles.Templates) - len(added)
+	for i := range added {
+		t := &cfg.Dotfiles.Templates[first+i]
+		tmplPath := filepath.Join(sourceDir, t.Src)
+		if _, err := os.Lstat(tmplPath); err == nil {
+			dir, file := filepath.Split(t.Src)
+			base := strings.TrimSuffix(file, ".tmpl")
+			for n := 2; ; n++ {
+				cand := dir + fmt.Sprintf("%s-%d.tmpl", base, n)
+				candPath := filepath.Join(sourceDir, cand)
+				if used[filepath.Clean(cand)] {
+					continue
+				}
+				if _, err := os.Lstat(candPath); err == nil {
+					continue
+				}
+				fmt.Fprintf(w, "nestor: %s already exists in %s - using %s\n", t.Src, sourceDir, cand)
+				t.Src, tmplPath = cand, candPath
+				break
+			}
+		}
+		used[filepath.Clean(t.Src)] = true
+		if err := os.MkdirAll(filepath.Dir(tmplPath), 0o755); err != nil {
+			return fmt.Errorf("create template dir: %w", err)
+		}
+		if err := fsutil.CopyFileSync(origins[t.Dest], tmplPath); err != nil {
+			return fmt.Errorf("copy template for %s: %w", t.Dest, err)
+		}
+	}
+	return nil
 }
