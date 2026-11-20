@@ -228,11 +228,25 @@ func decodeChezmoiPath(rel string) string {
 	if len(decoded) == 0 {
 		return ""
 	}
+	decoded[len(decoded)-1] = stripChezmoiSuffix(decoded[len(decoded)-1])
 	joined := filepath.Join(decoded...)
 	if !strings.HasPrefix(decoded[0], ".") {
 		return ""
 	}
 	return joined
+}
+
+// stripChezmoiSuffix drops chezmoi's target-name suffix attributes from the
+// final path component: dot_gitconfig.tmpl manages ~/.gitconfig, not
+// ~/.gitconfig.tmpl. ".literal" ends suffix parsing, so foo.tmpl.literal
+// manages foo.tmpl. A bare ".tmpl"/".literal" name has no target to keep.
+func stripChezmoiSuffix(name string) string {
+	for _, suf := range []string{".literal", ".tmpl"} {
+		if strings.HasSuffix(name, suf) && len(name) > len(suf) {
+			return strings.TrimSuffix(name, suf)
+		}
+	}
+	return name
 }
 
 // --- yadm ---

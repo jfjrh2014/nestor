@@ -312,3 +312,49 @@ func TestMergeResultExistingDestKeepsSrc(t *testing.T) {
 		t.Fatalf("re-import changed config: added=%d templates=%+v", added, cfg.Dotfiles.Templates)
 	}
 }
+
+func TestChezmoiPathDecodeStripsTemplateSuffix(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"dot_gitconfig.tmpl", ".gitconfig"},
+		{"dot_config/git/private_ignore.tmpl", ".config/git/ignore"},
+		{"private_executable_dot_local/bin/tool.tmpl", ".local/bin/tool"},
+		{"dot_vimrc.tmpl.literal", ".vimrc.tmpl"},
+		// only the target file's own suffix is an attribute
+		{"dot_config/app.tmpl/settings", ".config/app.tmpl/settings"},
+		{"dot_bashrc", ".bashrc"},
+	}
+	for _, tt := range tests {
+		if got := decodeChezmoiPath(tt.input); got != tt.want {
+			t.Errorf("decodeChezmoiPath(%q): got %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestChezmoiImportTemplateDest(t *testing.T) {
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "dot_gitconfig.tmpl")
+	if err := os.WriteFile(origin, []byte("[user]\n  name = {{ env \"USER\" }}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cz, err := NewChezmoi(dir)
+	if err != nil {
+		t.Fatalf("NewChezmoi: %v", err)
+	}
+	res, err := cz.Import()
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(res.Dotfiles) != 1 {
+		t.Fatalf("dotfiles: got %v, want one", res.Dotfiles)
+	}
+	d := res.Dotfiles[0]
+	if d.Dest != "~/.gitconfig" || d.Src != ".gitconfig.tmpl" {
+		t.Errorf("got dest %q src %q, want ~/.gitconfig on .gitconfig.tmpl", d.Dest, d.Src)
+	}
+	if res.Origins["~/.gitconfig"] != origin {
+		t.Errorf("origin for ~/.gitconfig: got %q, want %q (origins %v)", res.Origins["~/.gitconfig"], origin, res.Origins)
+	}
+}
