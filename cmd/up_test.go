@@ -478,3 +478,98 @@ func TestSnapshotDestPathsMixedSpellingsDedup(t *testing.T) {
 		t.Fatalf("dests = %v, want [~/.a] (first spelling kept)", got)
 	}
 }
+
+// setupUpResultTest writes a config with one dotfile template into a temp
+// HOME and points the cfgFile seam at it. withSrc controls whether the
+// template's source file exists (false = the dotfile fails to deploy).
+func setupUpResultTest(t *testing.T, withSrc bool) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("SHELL", "/bin/bash")
+
+	source := filepath.Join(home, "dotfiles")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if withSrc {
+		if err := os.WriteFile(filepath.Join(source, "ghostrc.tmpl"), []byte("export GHOST=1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfgPath := filepath.Join(home, "nestor.yml")
+	content := "version: 1\ndotfiles:\n  source: " + source + "\n  templates:\n    - src: ghostrc.tmpl\n      dest: ~/.ghostrc\n"
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = "" })
+	return home
+}
+
+// upResultLine renders msg exactly as the ui printer does at the given
+// severity, so the assertions pin the severity as well as the text.
+func upResultLine(t *testing.T, level, msg string) string {
+	t.Helper()
+	var b bytes.Buffer
+	p := ui.New(&b)
+	switch level {
+	case "ok":
+		p.OK(msg)
+	case "warn":
+		p.Warn(msg)
+	default:
+		t.Fatalf("unknown level %q", level)
+	}
+	return b.String()
+}
+
+// TestUpResultWarnsWhenDotfileFails pins the 2026-11-21 fix: a dotfile that
+// fails to deploy was reported as "0 deployed, 1 failed" and then the result
+// section still printed a green "environment is up". The per-item failure
+// stays a reported failure (exit 0, the TestUpRefusesSelfInjectViaConfigFlag
+// contract), but the result line must say what failed.
+func TestUpResultWarnsWhenDotfileFails(t *testing.T) {
+	home := setupUpResultTest(t, false)
+
+	var buf bytes.Buffer
+	if err := runUpOut(context.Background(), &buf); err != nil {
+		t.Fatalf("per-item failure must not fail the command: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "0 deployed, 1 failed") {
+		t.Fatalf("fixture did not produce the dotfile failure:\n%s", out)
+	}
+	if strings.Contains(out, upResultLine(t, "ok", "environment is up")) {
+		t.Errorf("result claims a clean run after a failed dotfile:\n%s", out)
+	}
+	if !strings.Contains(out, upResultLine(t, "warn", "environment is partly up: 1 dotfile(s) failed (see above)")) {
+		t.Errorf("result line must warn and name the failed step:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ghostrc")); !os.IsNotExist(err) {
+		t.Errorf("failed dotfile must not land in HOME (stat err %v)", err)
+	}
+}
+
+// TestUpResultCleanRunStaysOK covers the untouched path: nothing failed, so
+// the result is the plain green line with no failure summary.
+func TestUpResultCleanRunStaysOK(t *testing.T) {
+	home := setupUpResultTest(t, true)
+
+	var buf bytes.Buffer
+	if err := runUpOut(context.Background(), &buf); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "1 deployed, 0 failed") {
+		t.Fatalf("fixture did not deploy the dotfile:\n%s", out)
+	}
+	if !strings.Contains(out, upResultLine(t, "ok", "environment is up")) || strings.Contains(out, "partly up") {
+		t.Errorf("clean run must end with the plain green result:\n%s", out)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".ghostrc"))
+	if err != nil || string(got) != "export GHOST=1\n" {
+		t.Errorf("deployed dotfile: got %q, err %v", got, err)
+	}
+}

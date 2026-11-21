@@ -3,7 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/dotfiles"
@@ -52,7 +54,21 @@ func ctxWithProfile(cmd *cobra.Command) context.Context {
 type profileKey struct{}
 
 func runUp(ctx context.Context) error {
-	p := ui.New(os.Stdout)
+	return runUpOut(ctx, os.Stdout)
+}
+
+// runUpOut is runUp writing to w. Per-item failures (a package, a dotfile, a
+// secret target, a shell plugin) are reported where they happen and do not
+// fail the command, but they are tallied so the result line never claims a
+// clean "environment is up" after something failed.
+func runUpOut(ctx context.Context, w io.Writer) error {
+	p := ui.New(w)
+	var failures []string
+	noteFailed := func(n int, what string) {
+		if n > 0 {
+			failures = append(failures, fmt.Sprintf("%d %s", n, what))
+		}
+	}
 
 	path := configPath()
 	p.Info(fmt.Sprintf("loading config from %s", path))
@@ -124,6 +140,7 @@ func runUp(ctx context.Context) error {
 			}
 		}
 		p.Info(fmt.Sprintf("%d installed, %d already present, %d failed", installed, skipped, failedCount))
+		noteFailed(failedCount, "package(s)")
 	}
 
 	// Step 3: snapshot existing dotfiles before overwriting
@@ -209,6 +226,7 @@ func runUp(ctx context.Context) error {
 			}
 		}
 		p.Info(fmt.Sprintf("%d deployed, %d failed", deployed, failedCount))
+		noteFailed(failedCount, "dotfile(s)")
 	}
 
 	// Step 5: inject secrets (base + profile layer)
@@ -220,6 +238,7 @@ func runUp(ctx context.Context) error {
 		prov, err := secrets.NewProvider(cfg.Secrets.Provider)
 		if err != nil {
 			p.Error(fmt.Sprintf("provider %s: %v", cfg.Secrets.Provider, err))
+			noteFailed(1, "secrets provider")
 		} else {
 			// Merge base + profile secret mappings
 			allMappings := make([]secrets.Mapping, 0, len(cfg.Secrets.Mappings)+len(profileSecrets))
@@ -239,6 +258,7 @@ func runUp(ctx context.Context) error {
 			vals, err := secrets.ResolveAll(prov, allMappings)
 			if err != nil {
 				p.Error(fmt.Sprintf("resolve: %v", err))
+				noteFailed(1, "secret resolution")
 			} else {
 				results := secrets.InjectAll(vals, allMappings)
 				injected, failedCount := 0, 0
@@ -253,16 +273,21 @@ func runUp(ctx context.Context) error {
 					}
 				}
 				p.Info(fmt.Sprintf("%d injected, %d failed", injected, failedCount))
+				noteFailed(failedCount, "secret target(s)")
 			}
 		}
 	}
 
 	// Step 6: configure shell
 	p.Header("shell")
-	configureShell(p, cfg)
+	noteFailed(configureShell(p, cfg), "shell step(s)")
 
 	p.Header("result")
-	p.OK("environment is up")
+	if len(failures) > 0 {
+		p.Warn(fmt.Sprintf("environment is partly up: %s failed (see above)", strings.Join(failures, ", ")))
+	} else {
+		p.OK("environment is up")
+	}
 
 	return nil
 }
@@ -346,11 +371,14 @@ func profileSecretCollisions(base, prof []config.Mapping) []string {
 // configureShell detects the current shell and sets up plugins. GitHub-type
 // plugins are cloned shallow and sourced in the shell rc file via an idempotent
 // managed block. Named plugins (standalone tools like starship) are skipped.
-func configureShell(p *ui.Printer, cfg *config.Config) {
+//
+// It returns how many shell steps failed (plugins plus the rc write) so the
+// caller's result line can count them.
+func configureShell(p *ui.Printer, cfg *config.Config) int {
 	currentShell, err := shell.Detect()
 	if err != nil {
 		p.Info("no shell detected — skipping plugin setup")
-		return
+		return 0
 	}
 
 	if cfg.Shells.Default != "" && cfg.Shells.Default != currentShell {
@@ -362,7 +390,7 @@ func configureShell(p *ui.Printer, cfg *config.Config) {
 
 	if len(cfg.Shells.Plugins) == 0 {
 		p.Info("no shell plugins declared")
-		return
+		return 0
 	}
 
 	p.Info(fmt.Sprintf("processing %d shell plugins", len(cfg.Shells.Plugins)))
@@ -387,7 +415,7 @@ func configureShell(p *ui.Printer, cfg *config.Config) {
 	rcPath := shell.RCFile(currentShell)
 	if rcPath == "" {
 		p.Info(fmt.Sprintf("no known rc file for %s — skipping source block", currentShell))
-		return
+		return failedCount
 	}
 
 	sourceLines, unresolved := shell.SourceLines(results)
@@ -396,7 +424,8 @@ func configureShell(p *ui.Printer, cfg *config.Config) {
 	}
 	if err := shell.WriteSourceBlock(rcPath, sourceLines); err != nil {
 		p.Error(fmt.Sprintf("writing source block: %v", err))
-		return
+		return failedCount + 1
 	}
 	p.OK(fmt.Sprintf("shell config updated: %s", rcPath))
+	return failedCount
 }
