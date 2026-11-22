@@ -172,9 +172,13 @@ func (c *Chezmoi) Import() (*Result, error) {
 			return nil
 		}
 
-		name := filepath.Base(dest)
+		// Only files chezmoi itself renders (a ".tmpl" attribute not ended by
+		// ".literal") become nestor templates. Naming every import <name>.tmpl
+		// made 'up' run plain files through text/template: a .vimrc with
+		// "{{{" fold markers failed with `unexpected "{"` and never deployed
+		// (probed 2026-11-22), and a file whose braces did parse was rewritten.
 		res.Dotfiles = append(res.Dotfiles, config.Template{
-			Src:  name + ".tmpl",
+			Src:  importSrc(filepath.Base(dest), chezmoiIsTemplate(filepath.Base(rel))),
 			Dest: "~/" + dest,
 		})
 		res.Origins["~/"+dest] = path
@@ -249,6 +253,42 @@ func stripChezmoiSuffix(name string) string {
 	return name
 }
 
+// chezmoiIsTemplate reports whether chezmoi renders the source file: its
+// final component carries the ".tmpl" suffix attribute and ".literal" did not
+// end suffix parsing first (foo.tmpl.literal is the plain file foo.tmpl).
+func chezmoiIsTemplate(base string) bool {
+	if strings.HasSuffix(base, ".literal") {
+		return false
+	}
+	return strings.HasSuffix(base, ".tmpl") && len(base) > len(".tmpl")
+}
+
+// importSrc names an imported dotfile's source: <name>.tmpl for a file the
+// foreign tool treats as a template, the bare name for a plain file. Deploy
+// renders only .tmpl srcs, so a plain file is copied byte for byte. A plain
+// file whose own name ends in ".tmpl" (chezmoi's foo.tmpl.literal, or a yadm
+// file named so) gets ".literal" appended, or deploy would render it anyway.
+func importSrc(name string, template bool) string {
+	if template {
+		return name + ".tmpl"
+	}
+	if strings.HasSuffix(name, ".tmpl") {
+		return name + ".literal"
+	}
+	return name
+}
+
+// NumberedSrc returns src with "-n" inserted before a ".tmpl" suffix
+// (config.tmpl -> config-2.tmpl) or appended to a plain name (.vimrc ->
+// .vimrc-2), so a renamed src keeps its template-or-plain kind.
+func NumberedSrc(src string, n int) string {
+	dir, file := filepath.Split(src)
+	if strings.HasSuffix(file, ".tmpl") && len(file) > len(".tmpl") {
+		return dir + fmt.Sprintf("%s-%d.tmpl", strings.TrimSuffix(file, ".tmpl"), n)
+	}
+	return dir + fmt.Sprintf("%s-%d", file, n)
+}
+
 // --- yadm ---
 
 // Yadm uses `yadm list -a` to find managed files.
@@ -297,9 +337,10 @@ func (y *Yadm) Import() (*Result, error) {
 			continue
 		}
 
-		name := filepath.Base(rel)
+		// yadm files are plain (yadm's own templates are ##template
+		// alternates, not something nestor can render), so they copy as is.
 		res.Dotfiles = append(res.Dotfiles, config.Template{
-			Src:  name + ".tmpl",
+			Src:  importSrc(filepath.Base(rel), false),
 			Dest: "~/" + rel,
 		})
 		res.Origins["~/"+rel] = line
@@ -385,15 +426,13 @@ func MergeResult(cfg *config.Config, res *Result) (int, error) {
 }
 
 // uniqueSrc returns src unchanged when no other template uses it, else the
-// first <base>-N.tmpl (N from 2) not in used.
+// first NumberedSrc(src, N) (N from 2) not in used.
 func uniqueSrc(src string, used map[string]bool) string {
 	if !used[filepath.Clean(src)] {
 		return src
 	}
-	dir, file := filepath.Split(src)
-	base := strings.TrimSuffix(file, ".tmpl")
 	for n := 2; ; n++ {
-		cand := dir + fmt.Sprintf("%s-%d.tmpl", base, n)
+		cand := NumberedSrc(src, n)
 		if !used[filepath.Clean(cand)] {
 			return cand
 		}

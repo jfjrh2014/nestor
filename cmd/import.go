@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
 	"github.com/jfjrh2014/nestor/internal/fsutil"
@@ -208,10 +207,8 @@ func materializeImported(cfg *config.Config, added []config.Template, origins ma
 		t := &cfg.Dotfiles.Templates[first+i]
 		tmplPath := filepath.Join(sourceDir, t.Src)
 		if _, err := os.Lstat(tmplPath); err == nil {
-			dir, file := filepath.Split(t.Src)
-			base := strings.TrimSuffix(file, ".tmpl")
 			for n := 2; ; n++ {
-				cand := dir + fmt.Sprintf("%s-%d.tmpl", base, n)
+				cand := importer.NumberedSrc(t.Src, n)
 				candPath := filepath.Join(sourceDir, cand)
 				if used[filepath.Clean(cand)] {
 					continue

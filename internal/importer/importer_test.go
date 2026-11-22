@@ -175,8 +175,9 @@ func TestChezmoiImport(t *testing.T) {
 	for _, d := range res.Dotfiles {
 		if d.Dest == "~/.bashrc" {
 			foundBashrc = true
-			if d.Src != ".bashrc.tmpl" {
-				t.Errorf("bashrc src: got %q, want %q", d.Src, ".bashrc.tmpl")
+			// plain chezmoi file: copied, never rendered (2026-11-22)
+			if d.Src != ".bashrc" {
+				t.Errorf("bashrc src: got %q, want %q", d.Src, ".bashrc")
 			}
 		}
 	}
@@ -356,5 +357,48 @@ func TestChezmoiImportTemplateDest(t *testing.T) {
 	}
 	if res.Origins["~/.gitconfig"] != origin {
 		t.Errorf("origin for ~/.gitconfig: got %q, want %q (origins %v)", res.Origins["~/.gitconfig"], origin, res.Origins)
+	}
+}
+
+// TestImportSrcNaming pins how imported srcs keep their kind (2026-11-22):
+// only a chezmoi template becomes <name>.tmpl, a plain name that happens to
+// end in .tmpl gets .literal so deploy copies it, and collision numbering
+// keeps the template-or-plain suffix.
+func TestImportSrcNaming(t *testing.T) {
+	isTmpl := map[string]bool{
+		"dot_gitconfig.tmpl":     true,
+		"dot_vimrc":              false,
+		"dot_vimrc.tmpl.literal": false,
+		".tmpl":                  false,
+	}
+	for base, want := range isTmpl {
+		if got := chezmoiIsTemplate(base); got != want {
+			t.Errorf("chezmoiIsTemplate(%q) = %v, want %v", base, got, want)
+		}
+	}
+	srcs := []struct {
+		name string
+		tmpl bool
+		want string
+	}{
+		{".gitconfig", true, ".gitconfig.tmpl"},
+		{".vimrc", false, ".vimrc"},
+		{".vimrc.tmpl", false, ".vimrc.tmpl.literal"},
+	}
+	for _, c := range srcs {
+		if got := importSrc(c.name, c.tmpl); got != c.want {
+			t.Errorf("importSrc(%q, %v) = %q, want %q", c.name, c.tmpl, got, c.want)
+		}
+	}
+	numbered := map[string]string{
+		"config.tmpl":         "config-2.tmpl",
+		"sub/config.tmpl":     "sub/config-2.tmpl",
+		".vimrc":              ".vimrc-2",
+		".vimrc.tmpl.literal": ".vimrc.tmpl.literal-2",
+	}
+	for in, want := range numbered {
+		if got := NumberedSrc(in, 2); got != want {
+			t.Errorf("NumberedSrc(%q, 2) = %q, want %q", in, got, want)
+		}
 	}
 }

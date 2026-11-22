@@ -45,8 +45,9 @@ func TestYadmImport(t *testing.T) {
 	if len(res.Dotfiles) != 2 {
 		t.Fatalf("dotfiles: got %d, want 2. got: %v", len(res.Dotfiles), res.Dotfiles)
 	}
-	if res.Dotfiles[0].Dest != "~/.bashrc" || res.Dotfiles[0].Src != ".bashrc.tmpl" {
-		t.Errorf("first dotfile: got %+v, want Src .bashrc.tmpl Dest ~/.bashrc", res.Dotfiles[0])
+	// yadm files are plain: copied, never rendered (2026-11-22)
+	if res.Dotfiles[0].Dest != "~/.bashrc" || res.Dotfiles[0].Src != ".bashrc" {
+		t.Errorf("first dotfile: got %+v, want Src .bashrc Dest ~/.bashrc", res.Dotfiles[0])
 	}
 	if res.Dotfiles[1].Dest != "~/.config/nvim/init.vim" {
 		t.Errorf("nested dotfile dest: got %q", res.Dotfiles[1].Dest)

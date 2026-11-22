@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/dotfiles"
 )
 
 func TestResolveImporterUnknownSource(t *testing.T) {
@@ -340,7 +341,9 @@ func TestImportMaterializesTemplates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	orphan := filepath.Join(dir, "dotfiles", ".bashrc.tmpl")
+	// dot_bashrc is plain, so its src is .bashrc (2026-11-22): the orphan
+	// sits on that name to keep exercising the collision path.
+	orphan := filepath.Join(dir, "dotfiles", ".bashrc")
 	if err := os.WriteFile(orphan, []byte("ORPHAN\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -382,8 +385,8 @@ func TestImportMaterializesTemplates(t *testing.T) {
 		if string(got) != body {
 			t.Errorf("template for %s = %q, want origin bytes %q", tm.Dest, got, body)
 		}
-		if tm.Dest == "~/.bashrc" && tm.Src == ".bashrc.tmpl" {
-			t.Error("the orphan .bashrc.tmpl on disk must not be adopted")
+		if tm.Dest == "~/.bashrc" && tm.Src == ".bashrc" {
+			t.Error("the orphan .bashrc on disk must not be adopted")
 		}
 	}
 	if got, _ := os.ReadFile(orphan); string(got) != "ORPHAN\n" {
@@ -420,5 +423,75 @@ func TestImportRefusesUnreadableOrigin(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(dir, "dotfiles"))
 	if len(entries) != 0 {
 		t.Errorf("refused import must copy nothing, source dir has %d entries", len(entries))
+	}
+}
+
+// TestImportPlainDotfileDeploysVerbatim pins the 2026-11-22 fix: import named
+// every dotfile <name>.tmpl, so deploy ran plain files through text/template.
+// A chezmoi .vimrc with "{{{" fold markers failed with `unexpected "{"` and
+// never reached HOME (probed with the HEAD binary). Plain files now import
+// under their own name and deploy byte for byte; a file chezmoi marks as a
+// template (dot_x.tmpl) stays a nestor template and is still rendered.
+func TestImportPlainDotfileDeploysVerbatim(t *testing.T) {
+	dir, cfgPath := setupImportTest(t)
+	t.Setenv("HOME", dir)
+	t.Setenv("NESTOR_IMPORT_PROBE", "rendered")
+	src := filepath.Join(dir, "chezmoi")
+	vimrc := "\" General {{{\nset number\n\" }}}\n"
+	files := map[string]string{
+		"dot_vimrc":            vimrc,
+		"dot_probe.tmpl":       "v={{ env \"NESTOR_IMPORT_PROBE\" }}\n",
+		"dot_raw.tmpl.literal": "{{ not a template }}\n",
+	}
+	for rel, body := range files {
+		p := filepath.Join(src, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := runImport("chezmoi", src, &buf); err != nil {
+		t.Fatalf("import: %v\n%s", err, buf.String())
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("imported config must load: %v", err)
+	}
+	wantSrc := map[string]string{
+		"~/.vimrc":    ".vimrc",
+		"~/.probe":    ".probe.tmpl",
+		"~/.raw.tmpl": ".raw.tmpl.literal",
+	}
+	var temps []dotfiles.Template
+	for _, tm := range cfg.Dotfiles.Templates {
+		if want, ok := wantSrc[tm.Dest]; !ok || tm.Src != want {
+			t.Errorf("dest %s: src %q, want %q", tm.Dest, tm.Src, want)
+		}
+		temps = append(temps, dotfiles.Template{Src: tm.Src, Dest: tm.Dest})
+	}
+	if len(temps) != len(wantSrc) {
+		t.Fatalf("want %d templates, got %+v", len(wantSrc), cfg.Dotfiles.Templates)
+	}
+
+	d := dotfiles.Deployer{Strategy: dotfiles.StrategyCopy, Source: cfg.Dotfiles.Source}
+	for _, r := range d.DeployAll(temps) {
+		if r.Err != nil {
+			t.Errorf("deploy %s: %v", r.Template.Dest, r.Err)
+		}
+	}
+	wantBody := map[string]string{
+		".vimrc":    vimrc,
+		".probe":    "v=rendered\n",
+		".raw.tmpl": "{{ not a template }}\n",
+	}
+	for name, want := range wantBody {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(got) != want {
+			t.Errorf("~/%s: got %q (err %v), want %q", name, got, err, want)
+		}
 	}
 }
