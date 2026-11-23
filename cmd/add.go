@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/dotfiles"
 	"github.com/jfjrh2014/nestor/internal/fsutil"
+	"github.com/jfjrh2014/nestor/internal/importer"
 	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"github.com/spf13/cobra"
 )
@@ -184,18 +186,32 @@ func addDotfile(name, profileName string, out io.Writer) error {
 		return fmt.Errorf("add dotfile: dest %s is a declared secret inject target — deploying the template overwrites the injected value", name)
 	}
 
-	// Figure out filename for src
+	// Figure out filename for src. The captured file is the user's real
+	// dotfile, not a template: recording it as <base>.tmpl made 'up' render
+	// it, so a .bashrc alias with docker's --format '{{.Names}}' failed with
+	// "nil data; no entry for key" and never deployed again (probed
+	// 2026-11-23). Keep the .tmpl name only when the content renders back to
+	// itself; otherwise record a plain copy under the file's own name (a
+	// name already ending in .tmpl gets .literal, the importer's rule). A
+	// re-add of a dest already recorded on <base>.tmpl keeps that name.
 	base := filepath.Base(absPath)
 	srcName := base + ".tmpl"
+	content, readErr := os.ReadFile(absPath)
+	if readErr != nil {
+		return fmt.Errorf("add dotfile: read %s: %w", absPath, readErr)
+	}
+	sourceDir := cfg.Dotfiles.Source
+	if sourceDir == "" {
+		sourceDir = config.DefaultDotfilesSource()
+	}
+	if !dotfiles.RendersToItself(content) && !ownsSrc(templateSrcOwners(cfg, sourceDir, filepath.Join(sourceDir, srcName)), name, home) {
+		srcName = importer.PlainSrc(base)
+	}
 
 	// Materialize the template into the source dir, mirroring 'nestor sync'
 	// capture: without it the recorded src points at a file that never
 	// exists and every 'nestor up' reports src-missing. An existing template
 	// is the user's working copy — never re-copied over.
-	sourceDir := cfg.Dotfiles.Source
-	if sourceDir == "" {
-		sourceDir = config.DefaultDotfilesSource()
-	}
 	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
 		return fmt.Errorf("add dotfile: create source dir: %w", err)
 	}
@@ -210,7 +226,7 @@ func addDotfile(name, profileName string, out io.Writer) error {
 	// <base>-N.tmpl that is this dest's own (a re-add) or wholly unused.
 	if owners := templateSrcOwners(cfg, sourceDir, tmplPath); hasOtherOwner(owners, name, home) {
 		for n := 2; ; n++ {
-			cand := fmt.Sprintf("%s-%d.tmpl", base, n)
+			cand := importer.NumberedSrc(srcName, n)
 			candPath := filepath.Join(sourceDir, cand)
 			candOwners := templateSrcOwners(cfg, sourceDir, candPath)
 			if hasOtherOwner(candOwners, name, home) {
@@ -524,6 +540,16 @@ func templateSrcOwners(cfg *config.Config, sourceDir, tmplPath string) []string 
 }
 
 // hasOtherOwner reports whether any owner dest is a different file than dest.
+// ownsSrc reports whether dest is among owners (the same file, any spelling).
+func ownsSrc(owners []string, dest, home string) bool {
+	for _, o := range owners {
+		if o == dest || pathutil.SamePath(o, dest, home) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasOtherOwner(owners []string, dest, home string) bool {
 	for _, o := range owners {
 		if o != dest && !pathutil.SamePath(o, dest, home) {

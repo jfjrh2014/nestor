@@ -233,14 +233,37 @@ func (d Deployer) symlink(src, dest string, t Template) Result {
 // missingkey=error makes an undefined key fail the render instead of silently
 // emitting "<no value>" into the deployed dotfile. It does not affect func
 // calls like env or literals, only map/index lookups on missing entries.
-func renderTemplate(path string) ([]byte, error) {
-	tmpl, err := template.New(filepath.Base(path)).
+// newTemplate is the deploy renderer's template: the funcs and options every
+// .tmpl src is rendered with. RendersToItself parses with the same one so its
+// answer matches what 'up' would do.
+func newTemplate(name string) *template.Template {
+	return template.New(name).
 		Funcs(template.FuncMap{
 			"env":  os.Getenv,
 			"home": currentHome,
 		}).
-		Option("missingkey=error").
-		ParseFiles(path)
+		Option("missingkey=error")
+}
+
+// RendersToItself reports whether data, rendered as a .tmpl src, comes out
+// byte for byte unchanged. A captured file that does (no template actions)
+// is safe to record as <name>.tmpl. One that does not, like a .bashrc alias
+// with docker's --format '{{.Names}}' or vim's {{{ fold markers, would fail
+// or change on every deploy, so it must be recorded as a plain copy.
+func RendersToItself(data []byte) bool {
+	tmpl, err := newTemplate("capture").Parse(string(data))
+	if err != nil {
+		return false
+	}
+	var buf strings.Builder
+	if err := tmpl.Execute(&buf, nil); err != nil {
+		return false
+	}
+	return buf.String() == string(data)
+}
+
+func renderTemplate(path string) ([]byte, error) {
+	tmpl, err := newTemplate(filepath.Base(path)).ParseFiles(path)
 	if err != nil {
 		return nil, err
 	}

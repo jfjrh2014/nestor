@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1557,5 +1558,117 @@ func TestAddDotfileSkipsOrphanTemplateName(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "dotfiles", "config-3.tmpl")); string(b) != "ssh\n" {
 		t.Errorf("ssh template content = %q", b)
+	}
+}
+
+// setupAddKindTest pins HOME and the config to a temp dir with an empty
+// dotfiles source, so 'add' then 'up' run against nothing but the fixture.
+func setupAddKindTest(t *testing.T) (home, cfgPath string) {
+	t.Helper()
+	home = t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("SHELL", "/bin/bash")
+	cfgPath = filepath.Join(home, "nestor.yml")
+	content := "version: 1\ndotfiles:\n  source: " + filepath.Join(home, "dotfiles") + "\n"
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = "" })
+	return home, cfgPath
+}
+
+// TestAddDotfileTemplateSyntaxCapturedPlain pins the 2026-11-23 fix: add
+// recorded every dotfile as <name>.tmpl, so a .bashrc alias using docker's
+// --format '{{.Names}}' was rendered by 'up' and failed with "nil data; no
+// entry for key", and the file never deployed. Such a file is now captured
+// under its own name and copied byte for byte. A file whose own name ends
+// in .tmpl gets .literal, or deploy would still render it.
+func TestAddDotfileTemplateSyntaxCapturedPlain(t *testing.T) {
+	home, cfgPath := setupAddKindTest(t)
+	bashrc := "alias dps='docker ps --format \"{{.Names}}\"'\n"
+	vimTmpl := "\" folds {{{\nset nu\n\" }}}\n"
+	files := map[string]string{".bashrc": bashrc, "notes.tmpl": vimTmpl}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(home, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	for _, dest := range []string{"~/.bashrc", "~/notes.tmpl"} {
+		if err := addDotfile(dest, "", &out); err != nil {
+			t.Fatalf("add %s: %v", dest, err)
+		}
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	want := map[string]string{"~/.bashrc": ".bashrc", "~/notes.tmpl": "notes.tmpl.literal"}
+	if len(cfg.Dotfiles.Templates) != len(want) {
+		t.Fatalf("templates = %+v", cfg.Dotfiles.Templates)
+	}
+	for _, tm := range cfg.Dotfiles.Templates {
+		if want[tm.Dest] != tm.Src {
+			t.Errorf("%s recorded on src %q, want %q (a plain copy)", tm.Dest, tm.Src, want[tm.Dest])
+		}
+	}
+	for name := range files {
+		if err := os.Remove(filepath.Join(home, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var upOut bytes.Buffer
+	if err := runUpOut(context.Background(), &upOut); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if !strings.Contains(upOut.String(), "2 deployed, 0 failed") {
+		t.Fatalf("up did not deploy both captured files:\n%s", upOut.String())
+	}
+	for name, body := range files {
+		got, err := os.ReadFile(filepath.Join(home, name))
+		if err != nil || string(got) != body {
+			t.Errorf("%s after up: got %q, err %v; want the original bytes %q", name, got, err, body)
+		}
+	}
+}
+
+// TestAddDotfileReAddKeepsRecordedTemplate covers the untouched path: a dest
+// already recorded on <base>.tmpl keeps that src on a re-add even when its
+// content has template syntax (the user's working copy, possibly a real
+// template), and no plain copy is left behind as an orphan.
+func TestAddDotfileReAddKeepsRecordedTemplate(t *testing.T) {
+	home, cfgPath := setupAddKindTest(t)
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := addDotfile("~/.bashrc", "", &out); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export H={{ home }}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := addDotfile("~/.bashrc", "", &out); err != nil {
+		t.Fatalf("re-add: %v", err)
+	}
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("re-add changed the config:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if !strings.Contains(string(after), "src: .bashrc.tmpl") {
+		t.Errorf("re-add lost the recorded .tmpl src:\n%s", after)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "dotfiles", ".bashrc")); !os.IsNotExist(err) {
+		t.Errorf("re-add left a plain orphan copy (lstat err %v)", err)
 	}
 }

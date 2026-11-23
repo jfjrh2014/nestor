@@ -278,6 +278,12 @@ func importSrc(name string, template bool) string {
 	return name
 }
 
+// PlainSrc names a source for a file that must be copied, not rendered: the
+// name itself, or name+".literal" when it already ends in ".tmpl".
+func PlainSrc(name string) string {
+	return importSrc(name, false)
+}
+
 // NumberedSrc returns src with "-n" inserted before a ".tmpl" suffix
 // (config.tmpl -> config-2.tmpl) or appended to a plain name (.vimrc ->
 // .vimrc-2), so a renamed src keeps its template-or-plain kind.

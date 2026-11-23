@@ -1759,3 +1759,26 @@ func TestDeployRefusesProtectedDestUncleanSpelling(t *testing.T) {
 		t.Fatalf("temp files left behind: %v", litter)
 	}
 }
+
+// TestRendersToItself pins the capture check 'add dotfile' uses: only
+// content with no template actions survives the deploy renderer unchanged.
+func TestRendersToItself(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"plain", "export FOO=1\n", true},
+		{"empty", "", true},
+		{"single braces", "fn() { echo hi; }\n", true},
+		{"docker format", "alias dps='docker ps --format \"{{.Names}}\"'\n", false},
+		{"vim fold markers", "\" {{{\nset nu\n\" }}}\n", false},
+		{"string action", "x={{ \"y\" }}\n", false},
+		{"comment action", "a{{/* c */}}b\n", false},
+	}
+	for _, c := range cases {
+		if got := RendersToItself([]byte(c.data)); got != c.want {
+			t.Errorf("%s: RendersToItself(%q) = %v, want %v", c.name, c.data, got, c.want)
+		}
+	}
+}
