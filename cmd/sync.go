@@ -6,10 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/jfjrh2014/nestor/internal/config"
+	"github.com/jfjrh2014/nestor/internal/dotfiles"
 	"github.com/jfjrh2014/nestor/internal/fsutil"
+	"github.com/jfjrh2014/nestor/internal/importer"
 	"github.com/jfjrh2014/nestor/internal/packages"
 	"github.com/jfjrh2014/nestor/internal/pathutil"
 	"github.com/jfjrh2014/nestor/internal/platform"
@@ -350,13 +351,25 @@ func scanPackages(pkgMgr string) []string {
 	return names
 }
 
+// scanDotfiles records each common dotfile found under home. The captured
+// file is the user's real dotfile, not a template: naming every src
+// <name>.tmpl made 'up' render it, so a .bashrc alias with docker's
+// --format '{{.Names}}' failed with "nil data; no entry for key" and never
+// deployed (probed 2026-11-24). Same rule as 'add dotfile' (2026-11-23):
+// keep <name>.tmpl only when the content renders back to itself, otherwise
+// record a plain copy under the file's own name. A file that cannot be read
+// keeps the .tmpl name; the copy step reports the read error.
 func scanDotfiles(home string) []config.Template {
 	templates := []config.Template{}
 	for _, d := range commonDotfiles {
 		fullPath := filepath.Join(home, d.name)
 		if _, err := os.Stat(fullPath); err == nil {
+			src := d.name + ".tmpl"
+			if data, readErr := os.ReadFile(fullPath); readErr == nil && !dotfiles.RendersToItself(data) {
+				src = importer.PlainSrc(d.name)
+			}
 			templates = append(templates, config.Template{
-				Src:  d.name + ".tmpl",
+				Src:  src,
 				Dest: d.dest,
 			})
 		}
@@ -408,10 +421,10 @@ func uniqueScanSrcs(cfg *config.Config, profileName string, found []config.Templ
 			continue
 		}
 		if owner, ok := owners[filepath.Clean(t.Src)]; ok && owner != dest {
-			dir, file := filepath.Split(t.Src)
-			base := strings.TrimSuffix(file, ".tmpl")
 			for n := 2; ; n++ {
-				cand := dir + fmt.Sprintf("%s-%d.tmpl", base, n)
+				// NumberedSrc keeps the src's kind: a plain capture stays
+				// plain (.bashrc-2), a template stays .tmpl (.zshrc-2.tmpl).
+				cand := importer.NumberedSrc(t.Src, n)
 				owner, ok := owners[filepath.Clean(cand)]
 				if ok && owner != dest {
 					continue

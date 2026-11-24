@@ -938,3 +938,75 @@ func TestUniqueScanSrcs(t *testing.T) {
 		}
 	}
 }
+
+// TestScanDotfilesCapturesTemplateSyntaxPlain pins the 2026-11-24 fix: sync
+// recorded every captured dotfile as <name>.tmpl, so a .bashrc alias with
+// docker's --format '{{.Names}}' made 'up' fail with "nil data; no entry for
+// key" and never deploy. Content that does not render back to itself is
+// captured plain under its own name; plain-text files keep the .tmpl name.
+func TestScanDotfilesCapturesTemplateSyntaxPlain(t *testing.T) {
+	home := t.TempDir()
+	files := map[string]string{
+		".bashrc":    "alias dps='docker ps --format \"{{.Names}}\"'\n",
+		".vimrc":     "\" Section {{{\nset nu\n\" }}}\n",
+		".gitconfig": "[user]\n\tname = Tester\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(home, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := map[string]string{}
+	detected := scanDotfiles(home)
+	for _, d := range detected {
+		got[d.Dest] = d.Src
+	}
+	want := map[string]string{
+		"~/.bashrc":    ".bashrc",
+		"~/.vimrc":     ".vimrc",
+		"~/.gitconfig": ".gitconfig.tmpl",
+	}
+	for dest, w := range want {
+		if got[dest] != w {
+			t.Errorf("%s src = %q, want %q", dest, got[dest], w)
+		}
+	}
+
+	sourceDir := filepath.Join(home, "src")
+	if _, _, err := copyDotfileTemplates(home, sourceDir, detected); err != nil {
+		t.Fatalf("copyDotfileTemplates: %v", err)
+	}
+	for _, d := range detected {
+		name := strings.TrimPrefix(d.Dest, "~/")
+		b, err := os.ReadFile(filepath.Join(sourceDir, d.Src))
+		if err != nil {
+			t.Fatalf("captured %s: %v", d.Src, err)
+		}
+		if string(b) != files[name] {
+			t.Errorf("captured %s = %q, want the home file byte for byte", d.Src, b)
+		}
+	}
+}
+
+// TestUniqueScanSrcsKeepsPlainKind: a plain capture whose name is taken by
+// another dest must be renumbered as a plain file (.bashrc-2), not turned
+// back into a template (.bashrc-2.tmpl) that 'up' would render.
+func TestUniqueScanSrcsKeepsPlainKind(t *testing.T) {
+	home := "/home/tester"
+	cfg := &config.Config{
+		Dotfiles: config.Dotfiles{Templates: []config.Template{
+			{Src: ".bashrc", Dest: "~/work/.bashrc"},
+			{Src: ".zshrc.tmpl", Dest: "~/.config/zsh/.zshrc"},
+		}},
+	}
+	got := uniqueScanSrcs(cfg, "", []config.Template{
+		{Src: ".bashrc", Dest: "~/.bashrc"},
+		{Src: ".zshrc.tmpl", Dest: "~/.zshrc"},
+	}, home, t.TempDir())
+	want := []string{".bashrc-2", ".zshrc-2.tmpl"}
+	for i, w := range want {
+		if got[i].Src != w {
+			t.Errorf("entry %d (%s) src = %q, want %q", i, got[i].Dest, got[i].Src, w)
+		}
+	}
+}
