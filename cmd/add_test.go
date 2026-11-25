@@ -1672,3 +1672,105 @@ func TestAddDotfileReAddKeepsRecordedTemplate(t *testing.T) {
 		t.Errorf("re-add left a plain orphan copy (lstat err %v)", err)
 	}
 }
+
+// TestAddDotfileRecordsPortableDest pins the 2026-11-25 fix: add wrote the
+// dest exactly as typed, so a relative ".vimrc" became dest ".vimrc" and
+// 'up' run from another directory deployed it there instead of into HOME,
+// and an absolute path under HOME pinned the entry to this machine's home.
+// Paths under HOME are now recorded as ~/<rel>, others as clean absolutes.
+func TestAddDotfileRecordsPortableDest(t *testing.T) {
+	home, cfgPath := setupAddKindTest(t)
+	outside := t.TempDir()
+	files := map[string]string{
+		filepath.Join(home, ".bashrc"):          "alias ll=ls\n",
+		filepath.Join(home, ".config/git/conf"): "[user]\n",
+		filepath.Join(home, ".vimrc"):           "set nu\n",
+		filepath.Join(outside, "motd"):          "hello\n",
+	}
+	for p, body := range files {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(home); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	for _, arg := range []string{
+		filepath.Join(home, ".bashrc"),      // absolute under HOME
+		".config/git/conf",                  // relative under HOME
+		"./.vimrc",                          // ./-spelled relative
+		filepath.Join(outside, ".", "motd"), // absolute outside HOME, unclean
+	} {
+		if err := addDotfile(arg, "", &out); err != nil {
+			t.Fatalf("add %s: %v", arg, err)
+		}
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var got []string
+	for _, tm := range cfg.Dotfiles.Templates {
+		got = append(got, tm.Dest)
+	}
+	want := []string{"~/.bashrc", "~/.config/git/conf", "~/.vimrc", filepath.Join(outside, "motd")}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("recorded dests = %q, want %q", got, want)
+	}
+	raw, _ := os.ReadFile(cfgPath)
+	if strings.Contains(string(raw), "dest: "+home) {
+		t.Errorf("config pins this machine's home:\n%s", raw)
+	}
+
+	// Deploy from an unrelated directory: everything lands where it came
+	// from, and nothing lands in the cwd.
+	for p := range files {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	elsewhere := t.TempDir()
+	if err := os.Chdir(elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	var upOut bytes.Buffer
+	if err := runUpOut(context.Background(), &upOut); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	for p, body := range files {
+		b, err := os.ReadFile(p)
+		if err != nil || string(b) != body {
+			t.Errorf("%s after up = %q, %v; want %q\n%s", p, b, err, body, upOut.String())
+		}
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Errorf("up deployed into the cwd: %v", entries)
+	}
+}
+
+// TestAddDotfileTildeDestKeptAsTyped pins the untouched path: a dest the
+// user already spelled with ~ is recorded exactly as typed.
+func TestAddDotfileTildeDestKeptAsTyped(t *testing.T) {
+	home, cfgPath := setupAddKindTest(t)
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := addDotfile("~/./.zshrc", "", &out); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Dotfiles.Templates) != 1 || cfg.Dotfiles.Templates[0].Dest != "~/./.zshrc" {
+		t.Errorf("templates = %+v, want dest kept as ~/./.zshrc", cfg.Dotfiles.Templates)
+	}
+}

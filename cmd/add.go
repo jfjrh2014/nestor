@@ -162,6 +162,13 @@ func addDotfile(name, profileName string, out io.Writer) error {
 		return fmt.Errorf("add dotfile: source %s not found: %v", absPath, err)
 	}
 
+	// Record the dest in a form every machine and every working directory
+	// agrees on. The raw argument was written as-is: a relative ".vimrc"
+	// became dest ".vimrc", which 'up' then deployed into whatever directory
+	// it ran from, and an absolute path under HOME pinned the entry to this
+	// machine's home (both probed 2026-11-25 with the HEAD binary).
+	name = portableDest(name, absPath, home)
+
 	// Session #113: a dest that is a declared secret inject target would have
 	// every deploy silently overwrite the injected value, and a dest of
 	// nestor's own config would rewrite the config that drives it. Refuse
@@ -410,6 +417,26 @@ var promptInjectHome = func() string {
 // refuses every tilde form against an empty home, which is the fix's
 // contract — never re-root a tilde dest at a guessed location.
 var addDotfileHome = promptInjectHome
+
+// portableDest returns the dest to record for a dotfile the user named as
+// name, which resolved to absPath. A tilde spelling is kept as typed. Any
+// other path under home is recorded as ~/<rel> so the config works on a
+// machine with a different home; a path outside home is recorded as its
+// clean absolute form so it never depends on the cwd 'up' runs from.
+func portableDest(name, absPath, home string) string {
+	if strings.HasPrefix(name, "~") {
+		return name
+	}
+	abs := filepath.Clean(absPath)
+	if home == "" || !filepath.IsAbs(home) {
+		return abs
+	}
+	rel, err := filepath.Rel(filepath.Clean(home), abs)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return abs
+	}
+	return "~/" + filepath.ToSlash(rel)
+}
 
 // promptInjectTarget asks the user for a dest path and template pattern for
 // the new secret. Both are optional — an empty line skips the target. The
