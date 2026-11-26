@@ -311,7 +311,7 @@ func NewYadm() (*Yadm, error) {
 func (y *Yadm) Name() string { return "yadm" }
 
 func (y *Yadm) Import() (*Result, error) {
-	// yadm list -a outputs the full paths of all managed files
+	// yadm list -a prints every managed file relative to the work tree
 	out, err := runCommand("yadm", "list", "-a")
 	if err != nil {
 		return nil, fmt.Errorf("running yadm list: %w", err)
@@ -329,19 +329,39 @@ func (y *Yadm) Import() (*Result, error) {
 		return nil, fmt.Errorf("resolving home directory: %w", homeErr)
 	}
 
+	// `yadm list -a` is `git ls-files` run from the yadm work tree, so it
+	// prints paths relative to that tree (".bashrc"), not absolute ones.
+	// Treating them as absolute skipped every managed file as "outside
+	// home" and the import added nothing (probed 2026-11-26 with real
+	// yadm). Resolve relative lines against the work tree yadm reports.
+	workTree := ""
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 
-		// convert absolute path to ~/relative
-		rel := strings.TrimPrefix(line, home+"/")
-		if rel == line {
+		abs := line
+		if !filepath.IsAbs(line) {
+			if workTree == "" {
+				top, err := runCommand("yadm", "rev-parse", "--show-toplevel")
+				workTree = strings.TrimSpace(top)
+				if err != nil || !filepath.IsAbs(workTree) {
+					return nil, fmt.Errorf("resolving yadm work tree: %v", err)
+				}
+			}
+			abs = filepath.Join(workTree, line)
+		}
+		abs = filepath.Clean(abs)
+
+		rel, err := filepath.Rel(filepath.Clean(home), abs)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			// outside home dir, skip
 			res.Skipped++
 			continue
 		}
+		rel = filepath.ToSlash(rel)
+		line = abs
 
 		// yadm files are plain (yadm's own templates are ##template
 		// alternates, not something nestor can render), so they copy as is.

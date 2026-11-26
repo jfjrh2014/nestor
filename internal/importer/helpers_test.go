@@ -367,3 +367,69 @@ func TestMergeResultHomeLookupFailure(t *testing.T) {
 		t.Errorf("refusal must leave the config untouched:\nbefore:\n%s\nafter:\n%s", cfgBefore, cfgAfter)
 	}
 }
+
+// Real `yadm list -a` is `git ls-files` run from the work tree: it prints
+// relative paths. The importer treated them as absolute and skipped every
+// file as outside home, so a yadm import added nothing (probed 2026-11-26).
+func TestYadmImportRelativeListResolvesAgainstWorkTree(t *testing.T) {
+	home := t.TempDir()
+	origHome := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { osUserHomeDir = origHome })
+
+	var calls []string
+	swapRunCommand(t, func(name string, args ...string) (string, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if len(args) > 0 && args[0] == "rev-parse" {
+			return home + "\n", nil
+		}
+		return ".bashrc\n.config/git/config\n", nil
+	})
+
+	res, err := (&Yadm{}).Import()
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.Skipped != 0 {
+		t.Errorf("skipped: got %d, want 0 (both files live in the work tree)", res.Skipped)
+	}
+	if len(res.Dotfiles) != 2 {
+		t.Fatalf("dotfiles: got %+v, want 2 entries", res.Dotfiles)
+	}
+	if res.Dotfiles[0].Dest != "~/.bashrc" || res.Dotfiles[0].Src != ".bashrc" {
+		t.Errorf("first dotfile: got %+v, want Src .bashrc Dest ~/.bashrc", res.Dotfiles[0])
+	}
+	if res.Dotfiles[1].Dest != "~/.config/git/config" {
+		t.Errorf("nested dest: got %q", res.Dotfiles[1].Dest)
+	}
+	if got, want := res.Origins["~/.bashrc"], filepath.Join(home, ".bashrc"); got != want {
+		t.Errorf("origin: got %q, want %q", got, want)
+	}
+	if len(calls) != 2 || calls[1] != "yadm rev-parse --show-toplevel" {
+		t.Errorf("commands: got %v, want list then one rev-parse", calls)
+	}
+}
+
+// A work tree yadm cannot report must refuse, not guess: guessing home
+// would mis-map every file of a custom work tree.
+func TestYadmImportRefusesUnknownWorkTree(t *testing.T) {
+	home := t.TempDir()
+	origHome := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { osUserHomeDir = origHome })
+
+	swapRunCommand(t, func(name string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "rev-parse" {
+			return "", errors.New("not a git repository")
+		}
+		return ".bashrc\n", nil
+	})
+
+	res, err := (&Yadm{}).Import()
+	if err == nil {
+		t.Fatalf("expected refusal, got nil (dotfiles %+v)", res.Dotfiles)
+	}
+	if !strings.Contains(err.Error(), "resolving yadm work tree") {
+		t.Errorf("error should name the work tree, got: %v", err)
+	}
+}
