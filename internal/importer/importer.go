@@ -200,6 +200,17 @@ func decodeChezmoiPath(rel string) string {
 	parts := strings.Split(rel, string(filepath.Separator))
 	var decoded []string
 	for _, part := range parts {
+		// chezmoi ignores every source name that starts with a literal "."
+		// at any depth: its own .chezmoiignore, .chezmoi.toml.tmpl,
+		// .chezmoiscripts/, .chezmoitemplates/, .chezmoiversion, plus .git,
+		// .github and the like. Only ".git" used to be skipped, so the rest
+		// were imported and 'up' wrote ~/.chezmoiignore etc. into home
+		// (probed 2026-11-27 against chezmoi v2.74.2 'managed'). The test is
+		// on the raw name: private_.secret is managed, as ~/.secret.
+		if strings.HasPrefix(part, ".") {
+			return "__skip__"
+		}
+
 		// chezmoi attribute prefixes stack: private_executable_dot_foo -> .foo
 		// strip attribute prefixes first, then handle dot_ / exact_
 		p := part
@@ -221,8 +232,6 @@ func decodeChezmoiPath(rel string) string {
 		case strings.HasPrefix(p, "dot_"):
 			p = "." + strings.TrimPrefix(p, "dot_")
 		case strings.HasPrefix(p, "exact_"):
-			return "__skip__"
-		case p == ".git" || strings.HasPrefix(p, ".git"):
 			return "__skip__"
 		}
 		decoded = append(decoded, p)

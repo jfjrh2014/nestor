@@ -402,3 +402,89 @@ func TestImportSrcNaming(t *testing.T) {
 		}
 	}
 }
+
+// chezmoi ignores every source name starting with a literal "." at any
+// depth. Only ".git" was skipped, so chezmoi's own .chezmoiignore,
+// .chezmoi.toml.tmpl, .chezmoiscripts/ and .chezmoitemplates/ were imported
+// as dotfiles and 'up' wrote them into HOME (probed 2026-11-27; the expected
+// set below is what chezmoi v2.74.2 'managed --include files' lists).
+func TestChezmoiImportSkipsChezmoiOwnFiles(t *testing.T) {
+	chezmoiDir := filepath.Join(t.TempDir(), "chezmoi")
+	files := map[string]string{
+		"dot_bashrc":                          "alias ll='ls -l'\n",
+		"dot_config/app/conf":                 "k=v\n",
+		".chezmoiignore":                      "README.md\n",
+		".chezmoi.toml.tmpl":                  "[data]\n",
+		".chezmoiversion":                     "2.0.0\n",
+		".chezmoiscripts/run_once_install.sh": "#!/bin/sh\n",
+		".chezmoitemplates/footer":            "shared\n",
+		".editorconfig":                       "root = true\n",
+		".github/workflows/ci.yml":            "on: push\n",
+		"dot_config/app/.hidden":              "x\n",
+	}
+	for rel, content := range files {
+		full := filepath.Join(chezmoiDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cz, err := NewChezmoi(chezmoiDir)
+	if err != nil {
+		t.Fatalf("NewChezmoi: %v", err)
+	}
+	res, err := cz.Import()
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	var dests []string
+	for _, d := range res.Dotfiles {
+		dests = append(dests, d.Dest)
+		if strings.Contains(d.Dest, ".chezmoi") {
+			t.Errorf("chezmoi's own file imported as a dotfile: %+v", d)
+		}
+	}
+	want := map[string]bool{"~/.bashrc": true, "~/.config/app/conf": true}
+	if len(dests) != len(want) {
+		t.Fatalf("dests: got %v, want exactly ~/.bashrc and ~/.config/app/conf", dests)
+	}
+	for _, d := range dests {
+		if !want[d] {
+			t.Errorf("unexpected dest %q (chezmoi does not manage it)", d)
+		}
+	}
+	if res.Skipped != 8 {
+		t.Errorf("skipped: got %d, want 8 (every dot-named source)", res.Skipped)
+	}
+	if len(res.Origins) != 2 {
+		t.Errorf("origins: got %v, want only the 2 managed files", res.Origins)
+	}
+}
+
+func TestChezmoiPathDecodeSkipsDotNames(t *testing.T) {
+	for _, in := range []string{
+		".chezmoiignore",
+		".chezmoi.toml.tmpl",
+		".chezmoiscripts/run_once_install.sh",
+		".chezmoitemplates/footer",
+		".editorconfig",
+		"dot_config/app/.hidden",
+	} {
+		if got := decodeChezmoiPath(in); got != "__skip__" {
+			t.Errorf("decodeChezmoiPath(%q): got %q, want __skip__", in, got)
+		}
+	}
+	// dot_ is chezmoi's spelling of a leading dot and must still decode.
+	if got := decodeChezmoiPath("private_dot_ssh/config"); got != ".ssh/config" {
+		t.Errorf("private_dot_ssh/config: got %q, want .ssh/config", got)
+	}
+	// The dot test is on the raw name: chezmoi v2.74.2 manages
+	// private_.secret as ~/.secret.
+	if got := decodeChezmoiPath("private_.secret"); got != ".secret" {
+		t.Errorf("private_.secret: got %q, want .secret", got)
+	}
+}
