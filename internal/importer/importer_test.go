@@ -3,6 +3,7 @@ package importer
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -194,7 +195,7 @@ func TestChezmoiPathDecode(t *testing.T) {
 		{"dot_bashrc", ".bashrc"},
 		{"dot_config/nvim/init.vim", ".config/nvim/init.vim"},
 		{"private_dot_ssh/config", ".ssh/config"},
-		{"exact_dot_config/fish/config.fish", "__skip__"},
+		{"exact_dot_config/fish/config.fish", ".config/fish/config.fish"},
 	}
 	for _, tt := range tests {
 		got := decodeChezmoiPath(tt.input)
@@ -486,5 +487,79 @@ func TestChezmoiPathDecodeSkipsDotNames(t *testing.T) {
 	// private_.secret as ~/.secret.
 	if got := decodeChezmoiPath("private_.secret"); got != ".secret" {
 		t.Errorf("private_.secret: got %q, want .secret", got)
+	}
+}
+
+// chezmoi source names checked against 'chezmoi managed' (v2.74.2,
+// 2026-11-28): exact_ dirs still hold managed files, empty_ and literal_
+// are name attributes, and run_/symlink_/modify_/remove_/encrypted_ entries
+// are not file contents nestor can deploy.
+func TestChezmoiPathDecodeSpecialPrefixes(t *testing.T) {
+	tests := []struct{ input, want string }{
+		{"exact_dot_fish/config.fish", ".fish/config.fish"},
+		{"dot_vim/exact_colors/x.vim", ".vim/colors/x.vim"},
+		{"private_exact_dot_ssh/config", ".ssh/config"},
+		{"dot_config/empty_blank", ".config/blank"},
+		{"literal_dot_keep", ""},
+		{"dot_config/literal_dot_keep", ".config/dot_keep"},
+		{"dot_config/exact_note", ".config/exact_note"},
+		{"dot_config/run_once_setup.sh", "__skip__"},
+		{"dot_config/symlink_link", "__skip__"},
+		{"dot_config/modify_mod", "__skip__"},
+		{"dot_config/remove_gone", "__skip__"},
+		{"remove_dot_old/file", "__skip__"},
+		{"encrypted_private_dot_netrc", "__skip__"},
+		{"create_encrypted_dot_token", "__skip__"},
+		{"create_dot_hushlogin", ".hushlogin"},
+	}
+	for _, tt := range tests {
+		if got := decodeChezmoiPath(tt.input); got != tt.want {
+			t.Errorf("decodeChezmoiPath(%q): got %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// The import as a whole: what 'chezmoi managed --include files' lists for
+// this tree is exactly what nestor imports, and nothing else.
+func TestChezmoiImportMatchesManagedFiles(t *testing.T) {
+	src := t.TempDir()
+	files := map[string]string{
+		"dot_bashrc":                   "export A=1\n",
+		"exact_dot_fish/config.fish":   "set -x A 1\n",
+		"dot_vim/exact_colors/x.vim":   "hi\n",
+		"dot_config/empty_blank":       "x\n",
+		"dot_config/run_once_setup.sh": "#!/bin/sh\n",
+		"dot_config/symlink_link":      "target\n",
+		"dot_config/modify_mod":        "#!/bin/sh\ncat\n",
+		"dot_config/remove_gone":       "y\n",
+	}
+	for rel, body := range files {
+		p := filepath.Join(src, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := (&Chezmoi{SourceDir: src}).Import()
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	var got []string
+	for _, d := range res.Dotfiles {
+		got = append(got, d.Dest)
+	}
+	sort.Strings(got)
+	want := []string{"~/.bashrc", "~/.config/blank", "~/.fish/config.fish", "~/.vim/colors/x.vim"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("imported dests:\n got %v\nwant %v", got, want)
+	}
+	if res.Skipped != 4 {
+		t.Errorf("skipped: got %d, want 4 (run_, symlink_, modify_, remove_)", res.Skipped)
+	}
+	if o := res.Origins["~/.fish/config.fish"]; o != filepath.Join(src, "exact_dot_fish", "config.fish") {
+		t.Errorf("origin for exact_ file: got %q", o)
 	}
 }

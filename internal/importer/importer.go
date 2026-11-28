@@ -192,14 +192,34 @@ func (c *Chezmoi) Import() (*Result, error) {
 
 // chezmoi attribute prefixes that stack on top of dot_/exact_.
 // Order matters: strip these first, then decode the core prefix.
-var chezmoiAttrPrefixes = []string{"private_", "executable_", "readonly_", "create_"}
+var chezmoiAttrPrefixes = []string{"private_", "executable_", "readonly_", "create_", "empty_"}
+
+// skipChezmoiEntry reports whether a raw source name is a chezmoi entry
+// whose contents are not the target file's contents. The type prefixes lead
+// the name (before encrypted_/private_/...), so they are checked on the raw
+// part; encrypted_ may follow create_.
+func skipChezmoiEntry(part string, last bool) bool {
+	if strings.HasPrefix(part, "remove_") {
+		return true
+	}
+	if !last {
+		return false
+	}
+	for _, prefix := range []string{"run_", "symlink_", "modify_", "encrypted_", "create_encrypted_"} {
+		if strings.HasPrefix(part, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // decodeChezmoiPath converts a chezmoi source path to its target home-dir path.
 // Returns "" if not importable, "__skip__" for intentionally skipped files.
 func decodeChezmoiPath(rel string) string {
 	parts := strings.Split(rel, string(filepath.Separator))
 	var decoded []string
-	for _, part := range parts {
+	for i, part := range parts {
+		last := i == len(parts)-1
 		// chezmoi ignores every source name that starts with a literal "."
 		// at any depth: its own .chezmoiignore, .chezmoi.toml.tmpl,
 		// .chezmoiscripts/, .chezmoitemplates/, .chezmoiversion, plus .git,
@@ -211,11 +231,34 @@ func decodeChezmoiPath(rel string) string {
 			return "__skip__"
 		}
 
-		// chezmoi attribute prefixes stack: private_executable_dot_foo -> .foo
-		// strip attribute prefixes first, then handle dot_ / exact_
+		// Entries that are not plain file contents can't become a nestor
+		// template: run_ scripts, symlink_ (contents are the link target),
+		// modify_ (a script that edits the target), remove_ (a deletion
+		// order) and encrypted_ (ciphertext). They used to import under
+		// their raw names, e.g. ~/.config/run_once_setup.sh, and 'up' would
+		// deploy them as files (probed 2026-11-28 against chezmoi v2.74.2).
+		if skipChezmoiEntry(part, last) {
+			return "__skip__"
+		}
+
+		// chezmoi attribute prefixes stack: private_executable_dot_foo -> .foo.
+		// exact_ is a directory attribute (prune unmanaged files); the files
+		// inside are still managed, so it is stripped, not skipped. Skipping
+		// it dropped every file under exact_dot_config/ from the import.
+		// literal_ ends prefix parsing.
 		p := part
-		for {
+		literal := false
+		for !literal {
 			stripped := false
+			if strings.HasPrefix(p, "literal_") {
+				p = strings.TrimPrefix(p, "literal_")
+				literal = true
+				break
+			}
+			if !last && strings.HasPrefix(p, "exact_") {
+				p = strings.TrimPrefix(p, "exact_")
+				stripped = true
+			}
 			for _, prefix := range chezmoiAttrPrefixes {
 				if strings.HasPrefix(p, prefix) {
 					p = strings.TrimPrefix(p, prefix)
@@ -228,11 +271,8 @@ func decodeChezmoiPath(rel string) string {
 			}
 		}
 
-		switch {
-		case strings.HasPrefix(p, "dot_"):
+		if !literal && strings.HasPrefix(p, "dot_") {
 			p = "." + strings.TrimPrefix(p, "dot_")
-		case strings.HasPrefix(p, "exact_"):
-			return "__skip__"
 		}
 		decoded = append(decoded, p)
 	}
